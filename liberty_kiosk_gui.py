@@ -133,24 +133,40 @@ class LibertyKiosk(tk.Tk):
         text.pack(padx=20, pady=10)
 
         found = False
+        marine_count = 0
+
         for i in range(7):
             d = datetime.date.today() - datetime.timedelta(days=i)
             log_file = DATA_DIR / "daily_logs" / f"liberty_log_{d.isoformat()}.csv"
-            if not log_file.exists(): continue
+            if not log_file.exists():
+                continue
 
             with open(log_file, "r", newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     if not row.get("Time_in") or row.get("Time_in").strip() == "":
                         found = True
-                        line = f"{row['Rank']:>4} | {row['Name']:30} | EDIPI: {row['EDIPI']:>10} | "
-                        line += f"Dest: {row.get('Destination','N/A'):25} | Out: {row['Time_out']}"
-                        if row.get("Buddy_Name") and row["Buddy_Name"] != "Self":
-                            line += f" | Buddy: {row['Buddy_Name']}"
-                        text.insert(tk.END, line + "\n")
+                        marine_count += 1
+
+                        text.insert(tk.END, f"{'═' * 78}\n\n")
+                        text.insert(tk.END, f"MARINE #{marine_count}\n")
+                        text.insert(tk.END, f"Rank/Name    : {row['Rank']} {row['Name']}\n")
+                        text.insert(tk.END, f"EDIPI        : {row['EDIPI']}\n")
+                        text.insert(tk.END, f"Destination  : {row.get('Destination', 'N/A')}\n")
+                        text.insert(tk.END, f"Time Out     : {row['Time_out']}\n\n")
+
+                        buddy_name = row.get("Buddy_Name", "")
+                        if buddy_name and buddy_name != "Self":
+                            buddy_edipi = row.get("Buddy_EDIPI", "")
+                            text.insert(tk.END, f"   └─ Buddy → {buddy_name} ({buddy_edipi})\n\n")
+                        else:
+                            text.insert(tk.END, "   (Solo)\n\n")
+
+                        text.insert(tk.END, f"{'─' * 78}\n\n")
 
         if not found:
             text.insert(tk.END, "No Marines currently on liberty.\n")
+
         text.config(state="disabled")
 
         tk.Button(win, text="Close", bg=USMC_GOLD, fg=USMC_DARK, command=win.destroy).pack(pady=10)
