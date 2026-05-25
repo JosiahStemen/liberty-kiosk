@@ -16,25 +16,22 @@ USMC_DARK = "#001F3F"
 BG_COLOR = "#001F3F"
 
 ZYN_PUNS = [
-    "Monica Lewzynsky is NOT authorized for liberty!",
-    "Thomas Jefferzyn is NOT authorized for liberty!",
-    "Lynyrd Zynyrd is NOT authorized for liberty!",
-    "Zynjamin Franklin is NOT authorized for liberty!",
-    "Zyn Diesel is NOT authorized for liberty!",
-    "Zyndaya is NOT authorized for liberty!",
-    "Frank Zynatra is NOT authorized for liberty!",
+    "Monica Lewzynsky is NOT authorized liberty!",
+    "Thomas Jefferzyn is NOT authorized liberty!",
+    "Lynyrd Zynyrd is NOT authorized liberty!",
+    "Zynjamin Franklin is NOT authorized liberty!",
+    "Zyn Diesel is NOT authorized liberty!",
+    "Zyndaya is NOT authorized liberty!",
+    "Frank Zynatra is NOT authorized liberty!",
 
 ]
 
-# Real ZYN UPC codes + your test queso UPC (add more here if needed)
 ZYN_UPC_CODES = {
     "609249900036", "609249900425", "609249900418", "609249901415",
     "609249902412", "609249902429", "609249903013", "609249903419",
     "609249903426", "609249904416", "609249904423", "609249906410",
     "609249906427", "609249907417", "609249907424", "609249914415",
     "609249914422",
-    # ← YOUR QUESO UPC GOES HERE FOR TESTING
-     "781138807159",
 }
 
 DATA_DIR = Path("liberty_data")
@@ -222,7 +219,6 @@ class LibertyKiosk(tk.Tk):
         header.pack_propagate(False)
         tk.Label(header, text="UNITED STATES MARINE CORPS", fg=USMC_GOLD, bg=USMC_RED, font=("Helvetica", 28, "bold")).pack(pady=8)
         tk.Label(header, text="MARDET-MONTEREY LIBERTY KIOSK", fg="white", bg=USMC_RED, font=("Helvetica", 36, "bold")).pack()
-        # SEMPER FIDELIS removed
 
         main = tk.Frame(self, bg=BG_COLOR)
         main.pack(fill="both", expand=True, padx=40, pady=40)
