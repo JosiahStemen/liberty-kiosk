@@ -4,10 +4,16 @@ import hashlib
 import random
 import re
 import signal
+import shutil
+import time
+import threading
 import sys
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, simpledialog
+import shutil
+import time
+import threading
 
 # USMC COLORS
 USMC_RED = "#C8102E"
@@ -53,13 +59,15 @@ class LibertyKiosk(tk.Tk):
         self.current_user = None
 
         self.build_main_screen()
-
+        self.start_daily_backup_scheduler()
+        
     def ignore_close(self): pass
 
     def init_files(self):
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         (DATA_DIR / "daily_logs").mkdir(parents=True, exist_ok=True)
-
+        (DATA_DIR / "backups").mkdir(parents=True, exist_ok=True)
+        
         if not PROFILES_FILE.exists():
             with open(PROFILES_FILE, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
@@ -749,7 +757,59 @@ class LibertyKiosk(tk.Tk):
             if raw_id == search or p.get("EDIPI") == search or search_lower in p.get("Full_Name", "").lower():
                 return raw_id, p
         return None, None
+        
+        def start_daily_backup_scheduler(self):
+        """Background thread that runs backup daily at 02:00 AM"""
+        def scheduler_loop():
+            while True:
+                now = datetime.datetime.now()
+                # Schedule for 02:00 AM today or tomorrow
+                if now.hour >= 2:
+                    next_run = now + datetime.timedelta(days=1)
+                else:
+                    next_run = now
+                next_run = next_run.replace(hour=2, minute=0, second=0, microsecond=0)
+                
+                wait_seconds = (next_run - now).total_seconds()
+                print(f"[BACKUP] Next backup scheduled in {wait_seconds/3600:.2f} hours (at 02:00 AM)")
 
+                time.sleep(wait_seconds)
+                
+                try:
+                    self.perform_log_backup()
+                except Exception as e:
+                    print(f"[BACKUP ERROR] {e}")
+
+        thread = threading.Thread(target=scheduler_loop, daemon=True, name="DailyBackupThread")
+        thread.start()
+        print("✅ Daily backup scheduler started (will run every day at 02:00 AM)")
+
+    def perform_log_backup(self):
+        """Copy previous day's log + create SHA256 hash in backups/ folder"""
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        log_file = DATA_DIR / "daily_logs" / f"liberty_log_{yesterday.isoformat()}.csv"
+        
+        if not log_file.exists():
+            print(f"[BACKUP] No log file for {yesterday} to backup.")
+            return
+
+        backup_dir = DATA_DIR / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        backup_file = backup_dir / f"liberty_log_{yesterday.isoformat()}.csv.bak"
+        hash_file = backup_dir / f"liberty_log_{yesterday.isoformat()}.sha256"
+
+        # Copy the log file
+        shutil.copy2(log_file, backup_file)
+
+        # Generate and save hash
+        with open(log_file, "rb") as f:
+            file_hash = hashlib.sha256(f.read()).hexdigest()
+
+        with open(hash_file, "w", encoding="utf-8") as f:
+            f.write(file_hash)
+
+        print(f"✅ BACKUP SUCCESS: {yesterday} log + hash saved to backups/")
 if __name__ == "__main__":
     def ignore(sig, frame): pass
     signal.signal(signal.SIGINT, ignore)
