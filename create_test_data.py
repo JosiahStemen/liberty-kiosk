@@ -105,5 +105,3 @@ print(f"   Logs are in:      {LOGS_DIR}")
 print(f"   Backups + hashes in: {BACKUPS_DIR}")
 EOF
 
-# 3. Run the updated test data generator
-python create_test_data.py
