@@ -4,7 +4,10 @@ import hashlib
 import random
 import re
 import signal
+import shutil
 import sys
+import time
+import threading
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, simpledialog
@@ -16,22 +19,23 @@ USMC_DARK = "#001F3F"
 BG_COLOR = "#001F3F"
 
 ZYN_PUNS = [
-    "Monica Lewzynsky is NOT authorized liberty!",
-    "Thomas Jefferzyn is NOT authorized liberty!",
-    "Lynyrd Zynyrd is NOT authorized liberty!",
-    "Zynjamin Franklin is NOT authorized liberty!",
-    "Zyn Diesel is NOT authorized liberty!",
-    "Zyndaya is NOT authorized liberty!",
-    "Frank Zynatra is NOT authorized liberty!",
-
+    "Monica Lewzynsky is NOT authorized for liberty!",
+    "Thomas Jefferzyn is NOT authorized for liberty!",
+    "Lynyrd Zynyrd is NOT authorized for liberty!",
+    "Zynjamin Franklin is NOT authorized for liberty!",
+    "Zyn Diesel is NOT authorized for liberty!",
+    "Zyndaya is NOT authorized for liberty!",
+    "Frank Zynatra is NOT authorized for liberty!",
 ]
 
+# Real ZYN UPC codes + your test queso UPC
 ZYN_UPC_CODES = {
     "609249900036", "609249900425", "609249900418", "609249901415",
     "609249902412", "609249902429", "609249903013", "609249903419",
     "609249903426", "609249904416", "609249904423", "609249906410",
     "609249906427", "609249907417", "609249907424", "609249914415",
     "609249914422",
+    "781138807159",
 }
 
 DATA_DIR = Path("liberty_data")
@@ -53,12 +57,14 @@ class LibertyKiosk(tk.Tk):
         self.current_user = None
 
         self.build_main_screen()
+        self.start_daily_backup_scheduler()
 
     def ignore_close(self): pass
 
     def init_files(self):
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         (DATA_DIR / "daily_logs").mkdir(parents=True, exist_ok=True)
+        (DATA_DIR / "backups").mkdir(parents=True, exist_ok=True)
 
         if not PROFILES_FILE.exists():
             with open(PROFILES_FILE, "w", newline="", encoding="utf-8") as f:
@@ -114,7 +120,6 @@ class LibertyKiosk(tk.Tk):
         print("DEBUG: Profile saved to disk successfully (with Full_Name)")
 
     def is_zyn_code(self, barcode):
-        """Return True ONLY if the scanned barcode exactly matches a real ZYN product UPC"""
         return barcode in ZYN_UPC_CODES
 
     # ==================== THEMED DIALOGS ====================
@@ -208,8 +213,6 @@ class LibertyKiosk(tk.Tk):
         dlg.bind("<Escape>", lambda e: no())
         dlg.wait_window(dlg)
         return result[0]
-
-    # =====================================================================
 
     def build_main_screen(self):
         for widget in self.winfo_children(): widget.destroy()
@@ -461,13 +464,11 @@ class LibertyKiosk(tk.Tk):
                     self.themed_showerror("Parse Error", "❌ Could not read CAC barcode.\nPlease scan the FRONT of the card again.")
                     continue
 
-            # ==================== REQUIRED DESTINATION ====================
             while True:
                 destination = self.themed_askstring("DESTINATION", "Where are you going?")
                 if destination and destination.strip():
                     break
                 self.themed_showerror("Required Field", "Destination / Location cannot be blank.\nPlease enter where you are going.")
-            # =================================================================
 
             self.log_check_out(group, full_name, destination)
             self.show_message(f"✅ Group of {len(group)} checked OUT", USMC_GOLD, 6)
@@ -476,7 +477,6 @@ class LibertyKiosk(tk.Tk):
         self.after(3000, self.build_main_screen)
 
     def verify_pin(self, profile, pin):
-        print("DEBUG: verify_pin called")
         return profile["PIN_hash"] == hashlib.sha256(pin.encode()).hexdigest()
 
     def find_open_entry(self, edipi):
@@ -485,7 +485,6 @@ class LibertyKiosk(tk.Tk):
             d = datetime.date.today() - datetime.timedelta(days=i)
             log_file = DATA_DIR / "daily_logs" / f"liberty_log_{d.isoformat()}.csv"
             if not log_file.exists():
-                print(f"  No log file for {d}")
                 continue
             print(f"  Checking file: {log_file.name}")
             with open(log_file, "r", newline="", encoding="utf-8") as f:
@@ -749,6 +748,57 @@ class LibertyKiosk(tk.Tk):
             if raw_id == search or p.get("EDIPI") == search or search_lower in p.get("Full_Name", "").lower():
                 return raw_id, p
         return None, None
+
+    # ==================== DAILY BACKUP FEATURE ====================
+    def start_daily_backup_scheduler(self):
+        """Background thread that runs backup daily at 02:00 AM"""
+        def scheduler_loop():
+            while True:
+                now = datetime.datetime.now()
+                if now.hour >= 2:
+                    next_run = now + datetime.timedelta(days=1)
+                else:
+                    next_run = now
+                next_run = next_run.replace(hour=2, minute=0, second=0, microsecond=0)
+                
+                wait_seconds = (next_run - now).total_seconds()
+                print(f"[BACKUP] Next backup scheduled in {wait_seconds/3600:.2f} hours (at 02:00 AM)")
+
+                time.sleep(wait_seconds)
+                
+                try:
+                    self.perform_log_backup()
+                except Exception as e:
+                    print(f"[BACKUP ERROR] {e}")
+
+        thread = threading.Thread(target=scheduler_loop, daemon=True, name="DailyBackupThread")
+        thread.start()
+        print("✅ Daily backup scheduler started (will run every day at 02:00 AM)")
+
+    def perform_log_backup(self):
+        """Copy previous day's log + create SHA256 hash in backups/ folder"""
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        log_file = DATA_DIR / "daily_logs" / f"liberty_log_{yesterday.isoformat()}.csv"
+        
+        if not log_file.exists():
+            print(f"[BACKUP] No log file for {yesterday} to backup.")
+            return
+
+        backup_dir = DATA_DIR / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        backup_file = backup_dir / f"liberty_log_{yesterday.isoformat()}.csv.bak"
+        hash_file = backup_dir / f"liberty_log_{yesterday.isoformat()}.sha256"
+
+        shutil.copy2(log_file, backup_file)
+
+        with open(log_file, "rb") as f:
+            file_hash = hashlib.sha256(f.read()).hexdigest()
+
+        with open(hash_file, "w", encoding="utf-8") as f:
+            f.write(file_hash)
+
+        print(f"✅ BACKUP SUCCESS: {yesterday} log + hash saved to backups/")
 
 if __name__ == "__main__":
     def ignore(sig, frame): pass
