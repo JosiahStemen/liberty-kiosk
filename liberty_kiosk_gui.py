@@ -499,13 +499,18 @@ class LibertyKiosk(tk.Tk):
                     if b_raw_id == raw_id:
                         self.themed_showerror("Duplicate", "You cannot add yourself as a buddy.")
                         continue
-                    if b_raw_id not in self.profiles:
+                    if b_raw_id in self.profiles:
+                        # Pull FULL buddy data from profile (correct EDIPI, names, etc.)
+                        buddy_data = self.profiles[b_raw_id].copy()
+                    else:
+                        # New buddy - create minimal profile
                         self.save_profile(b_raw_id, b_parsed["EDIPI"], b_parsed["Rank"], b_parsed["Last_Name"],
                                           b_parsed["First_Name"], b_parsed["Middle_Initial"], "UNKNOWN",
                                           hashlib.sha256("00000".encode()).hexdigest())
                         self.profiles = self.load_profiles()
-                    group.append(b_parsed)
-                    self.show_message(f"✅ {b_parsed['Full_Name']} added to group", USMC_GOLD, 2)
+                        buddy_data = self.profiles[b_raw_id].copy()
+                    group.append(buddy_data)
+                    self.show_message(f"✅ {buddy_data['Full_Name']} added to group", USMC_GOLD, 2)
                 except Exception:
                     self.themed_showerror("Parse Error", "❌ Could not read CAC barcode.")
                     continue
@@ -516,7 +521,7 @@ class LibertyKiosk(tk.Tk):
                     break
                 self.themed_showerror("Required Field", "Destination cannot be blank.")
 
-            self.log_check_out(group, full_name, destination)
+            self.log_check_out(group, profile, destination)
             self.show_message(f"✅ Group of {len(group)} checked OUT", USMC_GOLD, 6)
 
         self.current_user = None
@@ -556,17 +561,56 @@ class LibertyKiosk(tk.Tk):
                 writer.writeheader()
                 writer.writerows(rows)
 
-    def log_check_out(self, group_members, sponsor_name, destination):
+    def log_check_out(self, group_members, sponsor_profile, destination):
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_file = self.get_log_file()
         file_exists = log_file.exists()
+
+        # Enhanced CSV with buddy's full identifying data (EDIPI, Last, First)
+        fieldnames = [
+            "Rank", "Name", "EDIPI", "Last_Name", "First_Name",
+            "Buddy_Name", "Buddy_EDIPI", "Buddy_Last_Name", "Buddy_First_Name",
+            "Destination", "Time_out", "Time_in"
+        ]
         with open(log_file, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
             if not file_exists:
-                writer.writerow(["Rank", "Name", "EDIPI", "Buddy_Name", "Destination", "Time_out", "Time_in"])
+                writer.writeheader()
+
+            sponsor_edipi = sponsor_profile.get("EDIPI", "")
+            sponsor_last = sponsor_profile.get("Last_Name", "")
+            sponsor_first = sponsor_profile.get("First_Name", "")
+            sponsor_name = sponsor_profile.get("Full_Name", "")
+
             for member in group_members:
-                buddy_name = "Self" if member.get("Full_Name") == sponsor_name else sponsor_name
-                writer.writerow([member["Rank"], member.get("Full_Name", ""), member["EDIPI"], buddy_name, destination, now_str, ""])
+                member_edipi = member.get("EDIPI", "")
+                is_self = bool(member_edipi and member_edipi == sponsor_edipi)
+                if is_self:
+                    buddy_name = "Self"
+                    buddy_edipi = ""
+                    buddy_last = ""
+                    buddy_first = ""
+                else:
+                    buddy_name = sponsor_name
+                    buddy_edipi = sponsor_edipi
+                    buddy_last = sponsor_last
+                    buddy_first = sponsor_first
+
+                row = {
+                    "Rank": member.get("Rank", ""),
+                    "Name": member.get("Full_Name", ""),
+                    "EDIPI": member_edipi,
+                    "Last_Name": member.get("Last_Name", ""),
+                    "First_Name": member.get("First_Name", ""),
+                    "Buddy_Name": buddy_name,
+                    "Buddy_EDIPI": buddy_edipi,
+                    "Buddy_Last_Name": buddy_last,
+                    "Buddy_First_Name": buddy_first,
+                    "Destination": destination,
+                    "Time_out": now_str,
+                    "Time_in": ""
+                }
+                writer.writerow(row)
 
     def show_zyn_easter_egg(self, barcode):
         pun = random.choice(ZYN_PUNS)
