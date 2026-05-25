@@ -39,8 +39,24 @@ for i in range(NUM_DAYS):
         first = random.choice(FIRST_NAMES)
         last = random.choice(LAST_NAMES)
         name = f"{last} {first}"
-        edipi = f"{random.randint(100000000, 999999999)}"
-        buddy = "Self" if random.random() > 0.7 else random.choice(LAST_NAMES)
+        edipi = f"{random.randint(1000000000, 9999999999)}"   # 10-digit EDIPI
+        last_name = last
+        first_name = first
+
+        # 30% chance of buddy
+        if random.random() < 0.3:
+            buddy_first = random.choice(FIRST_NAMES)
+            buddy_last = random.choice(LAST_NAMES)
+            buddy_name = f"{buddy_last} {buddy_first}"
+            buddy_edipi = f"{random.randint(1000000000, 9999999999)}"
+            buddy_last_name = buddy_last
+            buddy_first_name = buddy_first
+        else:
+            buddy_name = "Self"
+            buddy_edipi = ""
+            buddy_last_name = ""
+            buddy_first_name = ""
+
         destination = random.choice(DESTINATIONS)
         
         hour_out = random.randint(16, 23)
@@ -54,12 +70,20 @@ for i in range(NUM_DAYS):
             minute_in = random.randint(0, 59)
             time_in = f"{log_date + datetime.timedelta(days=1 if hour_in < 8 else 0)} {hour_in:02d}:{minute_in:02d}:00"
 
-        rows.append([rank, name, edipi, buddy, destination, time_out, time_in])
+        rows.append([
+            rank, name, edipi, last_name, first_name,
+            buddy_name, buddy_edipi, buddy_last_name, buddy_first_name,
+            destination, time_out, time_in
+        ])
 
-    # Write the log file
+    # Write the log file with FULL new header
     with open(log_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["Rank", "Name", "EDIPI", "Buddy_Name", "Destination", "Time_out", "Time_in"])
+        writer.writerow([
+            "Rank", "Name", "EDIPI", "Last_Name", "First_Name",
+            "Buddy_Name", "Buddy_EDIPI", "Buddy_Last_Name", "Buddy_First_Name",
+            "Destination", "Time_out", "Time_in"
+        ])
         writer.writerows(rows)
 
     # ==================== CREATE BACKUP + HASH ====================
@@ -76,7 +100,10 @@ for i in range(NUM_DAYS):
 
     print(f"   → Backup + SHA256 hash created\n")
 
-print(f"\n🎉 DONE! Generated {NUM_DAYS} test log files with {ENTRIES_PER_DAY} entries each.")
+print(f"\n🎉 DONE! Generated {NUM_DAYS} test log files with the NEW full buddy columns.")
 print(f"   Logs are in:      {LOGS_DIR}")
 print(f"   Backups + hashes in: {BACKUPS_DIR}")
-print("\nYou can now run your backup_verifier.py to test everything!")
+EOF
+
+# 3. Run the updated test data generator
+python create_test_data.py
