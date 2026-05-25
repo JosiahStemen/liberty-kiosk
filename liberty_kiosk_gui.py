@@ -1,1 +1,1 @@
-FULL FILE CONTENT HERE - I need the full updated main file
+[FULL CODE FOR liberty_kiosk_gui.py]
