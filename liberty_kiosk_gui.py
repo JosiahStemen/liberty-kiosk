@@ -11,7 +11,7 @@ import time
 import threading
 from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import messagebox, simpledialog, filedialog, scrolledtext
 
 # USMC COLORS
 USMC_RED = "#C8102E"
@@ -96,19 +96,12 @@ class LibertyKiosk(tk.Tk):
     def save_profile(self, raw_id, edipi, rank, last, first, mi, phone, pin_hash):
         mi = str(mi or "").strip()
         full_name = f"{last}, {first}"
-        if mi:
-            full_name += f" {mi}"
+        if mi: full_name += f" {mi}"
 
         self.profiles[raw_id] = {
-            "Raw_ID": raw_id,
-            "EDIPI": edipi,
-            "Rank": rank,
-            "Last_Name": last,
-            "First_Name": first,
-            "Middle_Initial": mi,
-            "Phone": phone,
-            "PIN_hash": pin_hash,
-            "Full_Name": full_name
+            "Raw_ID": raw_id, "EDIPI": edipi, "Rank": rank,
+            "Last_Name": last, "First_Name": first, "Middle_Initial": mi,
+            "Phone": phone, "PIN_hash": pin_hash, "Full_Name": full_name
         }
         with open(PROFILES_FILE, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=["Raw_ID","EDIPI","Rank","Last_Name","First_Name","Middle_Initial","Phone","PIN_hash"])
@@ -116,6 +109,115 @@ class LibertyKiosk(tk.Tk):
             for p in self.profiles.values():
                 row = {k: p[k] for k in ["Raw_ID","EDIPI","Rank","Last_Name","First_Name","Middle_Initial","Phone","PIN_hash"]}
                 writer.writerow(row)
+
+    def find_profile_by_search(self, search):
+        if not search: return None, None
+        search = search.strip().lower()
+        for raw_id, p in self.profiles.items():
+            if (search in p.get("Full_Name", "").lower() or
+                search == p.get("EDIPI") or
+                search == raw_id):
+                return raw_id, p
+        return None, None
+
+    # ==================== FULLY WORKING ADMIN FUNCTIONS ====================
+    def admin_view_out(self):
+        win = tk.Toplevel(self)
+        win.title("Marines Currently on Liberty")
+        win.configure(bg=BG_COLOR)
+        win.geometry("1100x700")
+
+        tk.Label(win, text="MARINES CURRENTLY ON LIBERTY", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 20, "bold")).pack(pady=10)
+
+        text = scrolledtext.ScrolledText(win, font=("Consolas", 11), bg="#001F3F", fg=USMC_GOLD, width=130, height=35)
+        text.pack(padx=20, pady=10)
+
+        found = False
+        for i in range(7):
+            d = datetime.date.today() - datetime.timedelta(days=i)
+            log_file = DATA_DIR / "daily_logs" / f"liberty_log_{d.isoformat()}.csv"
+            if not log_file.exists(): continue
+
+            with open(log_file, "r", newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if not row.get("Time_in") or row.get("Time_in").strip() == "":
+                        found = True
+                        line = f"{row['Rank']:>4} | {row['Name']:30} | EDIPI: {row['EDIPI']:>10} | "
+                        line += f"Dest: {row.get('Destination','N/A'):25} | Out: {row['Time_out']}"
+                        if row.get("Buddy_Name") and row["Buddy_Name"] != "Self":
+                            line += f" | Buddy: {row['Buddy_Name']}"
+                        text.insert(tk.END, line + "\n")
+
+        if not found:
+            text.insert(tk.END, "No Marines currently on liberty.\n")
+        text.config(state="disabled")
+
+        tk.Button(win, text="Close", bg=USMC_GOLD, fg=USMC_DARK, command=win.destroy).pack(pady=10)
+
+    def admin_update_profile(self):
+        search = self.themed_askstring("Update Profile", "Enter Name or EDIPI to search:")
+        if not search: return
+        raw_id, profile = self.find_profile_by_search(search)
+        if not profile:
+            self.themed_showerror("Not Found", "No matching Marine found.")
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Update Marine Profile")
+        win.configure(bg=BG_COLOR)
+        win.geometry("700x600")
+
+        tk.Label(win, text=f"Editing: {profile['Full_Name']}", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 16, "bold")).pack(pady=10)
+
+        rank_var = tk.StringVar(value=profile["Rank"])
+        last_var = tk.StringVar(value=profile["Last_Name"])
+        first_var = tk.StringVar(value=profile["First_Name"])
+        mi_var = tk.StringVar(value=profile.get("Middle_Initial",""))
+        phone_var = tk.StringVar(value=profile["Phone"])
+
+        for label, var in [("Rank", rank_var), ("Last Name", last_var), ("First Name", first_var),
+                           ("Middle Initial", mi_var), ("Phone Number", phone_var)]:
+            tk.Label(win, text=label + ":", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 12)).pack(anchor="w", padx=50, pady=(10,0))
+            tk.Entry(win, textvariable=var, font=("Helvetica", 14), width=40).pack(padx=50, pady=5)
+
+        def save():
+            self.save_profile(raw_id, profile["EDIPI"], rank_var.get().strip(), last_var.get().strip(),
+                              first_var.get().strip(), mi_var.get().strip(), phone_var.get().strip(),
+                              profile["PIN_hash"])
+            self.profiles = self.load_profiles()
+            self.themed_showinfo("Success", "Profile updated successfully!")
+            win.destroy()
+
+        tk.Button(win, text="SAVE CHANGES", bg=USMC_GOLD, fg=USMC_DARK, font=("Helvetica", 14, "bold"), command=save).pack(pady=20)
+
+    def admin_reset_pin(self):
+        search = self.themed_askstring("Reset PIN", "Enter Name or EDIPI to search:")
+        if not search: return
+        raw_id, profile = self.find_profile_by_search(search)
+        if not profile:
+            self.themed_showerror("Not Found", "No matching Marine found.")
+            return
+
+        if not self.themed_askyesno("Confirm", f"Reset PIN for {profile['Full_Name']}?"):
+            return
+
+        new_pin = self.themed_askstring("New PIN", "Enter NEW 5-9 digit PIN:", show="*")
+        if not new_pin or not new_pin.isdigit() or not (5 <= len(new_pin) <= 9):
+            self.themed_showerror("Error", "PIN must be 5-9 digits.")
+            return
+
+        confirm = self.themed_askstring("Confirm PIN", "Re-enter the new PIN:", show="*")
+        if new_pin != confirm:
+            self.themed_showerror("Error", "PINs do not match.")
+            return
+
+        pin_hash = hashlib.sha256(new_pin.encode()).hexdigest()
+        self.save_profile(raw_id, profile["EDIPI"], profile["Rank"], profile["Last_Name"],
+                          profile["First_Name"], profile.get("Middle_Initial",""),
+                          profile["Phone"], pin_hash)
+        self.profiles = self.load_profiles()
+        self.themed_showinfo("Success", f"PIN for {profile['Full_Name']} has been reset.")
 
     def is_zyn_code(self, barcode):
         return barcode in ZYN_UPC_CODES
@@ -495,7 +597,8 @@ class LibertyKiosk(tk.Tk):
             ("3. Reset Marine PIN", self.admin_reset_pin),
             ("4. Change Admin Password", self.admin_change_password),
             ("5. Verify Backups (Integrity Check)", self.launch_backup_verifier),
-            ("6. Exit Kiosk", self.admin_shutdown)
+            ("6. Export Logs & Backups to USB", self.admin_export_to_usb),
+            ("7. Exit Kiosk", self.admin_shutdown)
         ]
         for text, cmd in buttons:
             tk.Button(admin_win, text=text, bg=USMC_GOLD, fg=USMC_DARK,
@@ -515,8 +618,7 @@ class LibertyKiosk(tk.Tk):
     def verify_admin_password(self):
         for _ in range(3):
             pwd = self.themed_askstring("Admin Login", "Enter Admin Password:", show='*')
-            if not pwd:
-                return False
+            if not pwd: return False
             with open(ADMIN_HASH_FILE, "r", encoding="utf-8") as f:
                 stored = f.read().strip()
             if hashlib.sha256(pwd.encode()).hexdigest() == stored:
@@ -524,34 +626,93 @@ class LibertyKiosk(tk.Tk):
             self.themed_showerror("Error", "Incorrect password")
         return False
 
-    def admin_view_out(self):
-        self.themed_showinfo("On Liberty", "View Marines Currently on Liberty")
-
-    def admin_update_profile(self):
-        self.themed_showinfo("Update Profile", "Update Marine Profile")
-
-    def admin_reset_pin(self):
-        self.themed_showinfo("Reset PIN", "Reset Marine PIN")
-
     def admin_change_password(self):
         self.themed_showinfo("Change Password", "Change Admin Password")
+
+    def admin_export_to_usb(self):
+        if not self.themed_askyesno("⚠️ PII/CUI WARNING",
+            "This will export logs containing names, EDIPIs, and phone numbers.\n\n"
+            "This data is PII/CUI. Only export to an approved, scanned USB.\n\n"
+            "Continue?"):
+            return
+
+        start_date_str = simpledialog.askstring("Start Date", 
+            "Enter START date for logs (YYYY-MM-DD)\nExample: 2026-05-20\n(Leave blank for ALL logs)", 
+            parent=self)
+        if start_date_str is None: return
+
+        end_date_str = simpledialog.askstring("End Date", 
+            "Enter END date for logs (YYYY-MM-DD)\nExample: 2026-05-24", 
+            parent=self)
+        if end_date_str is None: return
+
+        export_all = not start_date_str.strip() and not end_date_str.strip()
+
+        start_date = end_date = None
+        if not export_all:
+            try:
+                start_date = datetime.datetime.strptime(start_date_str.strip(), "%Y-%m-%d").date()
+                end_date = datetime.datetime.strptime(end_date_str.strip(), "%Y-%m-%d").date()
+                if start_date > end_date:
+                    self.themed_showerror("Invalid Range", "Start date cannot be after end date.")
+                    return
+            except ValueError:
+                self.themed_showerror("Invalid Date", "Please use the format YYYY-MM-DD")
+                return
+
+        usb_path = filedialog.askdirectory(title="Select USB Flash Drive (root folder)", initialdir="/")
+        if not usb_path: return
+
+        usb_path = Path(usb_path)
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+        export_folder = usb_path / f"LibertyKiosk_Export_{timestamp}"
+        export_folder.mkdir(parents=True, exist_ok=True)
+
+        try:
+            exported_logs = 0
+            logs_src = DATA_DIR / "daily_logs"
+            if logs_src.exists():
+                logs_dest = export_folder / "daily_logs"
+                logs_dest.mkdir(exist_ok=True)
+                for log_file in logs_src.glob("liberty_log_*.csv"):
+                    try:
+                        date_str = log_file.stem.split("_")[-1]
+                        file_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+                        if export_all or (start_date <= file_date <= end_date):
+                            shutil.copy2(log_file, logs_dest / log_file.name)
+                            exported_logs += 1
+                    except ValueError:
+                        shutil.copy2(log_file, logs_dest / log_file.name)
+                        exported_logs += 1
+
+            backups_src = DATA_DIR / "backups"
+            if backups_src.exists():
+                shutil.copytree(backups_src, export_folder / "backups", dirs_exist_ok=True)
+
+            for file in [PROFILES_FILE, ADMIN_HASH_FILE]:
+                if file.exists():
+                    shutil.copy2(file, export_folder / file.name)
+
+            range_text = "ALL logs" if export_all else f"{start_date} to {end_date}"
+            self.themed_showinfo("✅ Export Successful",
+                f"Export completed!\n\n"
+                f"Logs exported: {exported_logs} files ({range_text})\n"
+                f"Folder created: {export_folder}\n\n"
+                "You may now safely remove the USB drive.")
+
+            log_file = self.get_log_file()
+            with open(log_file, "a", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow([datetime.datetime.now().isoformat(), "ADMIN_EXPORT", "USB", 
+                               f"Exported {exported_logs} logs ({range_text}) to {export_folder}"])
+        except Exception as e:
+            self.themed_showerror("Export Error", f"Could not export files:\n{str(e)}")
 
     def admin_shutdown(self):
         if self.themed_askyesno("Shutdown", "Close the kiosk completely?"):
             self.destroy()
             sys.exit(0)
 
-    def find_profile_by_search(self, search):
-        if not search:
-            return None, None
-        search = search.strip()
-        search_lower = search.lower()
-        for raw_id, p in self.profiles.items():
-            if raw_id == search or p.get("EDIPI") == search or search_lower in p.get("Full_Name", "").lower():
-                return raw_id, p
-        return None, None
-
-    # ==================== DAILY BACKUP FEATURE ====================
     def start_daily_backup_scheduler(self):
         def scheduler_loop():
             while True:
