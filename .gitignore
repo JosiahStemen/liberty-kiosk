@@ -1,0 +1,24 @@
+# ==== PII / CUI — never commit ====
+# Runtime data: profiles (name, EDIPI, phone), daily liberty logs (destinations,
+# times, movement patterns), backups, and the admin audit trail.
+liberty_data/
+
+# ==== Credential hashes — never commit ====
+*.hash
+*_hash.txt
+superuser_hash.txt
+admin_hash.txt
+
+# ==== Python ====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# ==== OS / editor cruft ====
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

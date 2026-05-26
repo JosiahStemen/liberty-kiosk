@@ -1,6 +1,8 @@
 import csv
 import datetime
 import hashlib
+import hmac
+import os
 import random
 import re
 import signal
@@ -46,6 +48,59 @@ DEFAULT_ADMIN_PASSWORD = "LibertyKiosk2026!"
 SUPERUSER_HASH_FILE = "superuser_hash.txt"
 # Only you know this password. You can change it anytime from the Admin Menu.
 
+AUDIT_FILE = DATA_DIR / "admin_audit.csv"
+
+# ==================== PASSWORD / PIN HASHING ====================
+# PINs and admin/superuser passwords are stored as salted PBKDF2-HMAC-SHA256.
+# Legacy bare SHA-256 hashes (from older versions) are still accepted and are
+# transparently upgraded to the salted format on the next successful login.
+PBKDF2_ITERATIONS = 200_000
+
+
+def hash_secret(secret: str) -> str:
+    """Hash a PIN/password with a per-secret random salt (PBKDF2-HMAC-SHA256)."""
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", secret.encode("utf-8"), salt, PBKDF2_ITERATIONS)
+    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt.hex()}${dk.hex()}"
+
+
+def verify_secret(secret: str, stored: str):
+    """Verify a secret against a stored hash.
+
+    Returns (is_valid, needs_upgrade). ``needs_upgrade`` is True when the stored
+    value is a legacy unsalted SHA-256 hash that matched, signalling the caller
+    to re-hash and persist it in the modern salted format.
+    """
+    stored = (stored or "").strip()
+    if not stored:
+        return False, False
+    if stored.startswith("pbkdf2_sha256$"):
+        try:
+            _, iters, salt_hex, hash_hex = stored.split("$")
+            dk = hashlib.pbkdf2_hmac("sha256", secret.encode("utf-8"),
+                                     bytes.fromhex(salt_hex), int(iters))
+            return hmac.compare_digest(dk.hex(), hash_hex), False
+        except Exception:
+            return False, False
+    # Legacy: bare 64-char hex SHA-256 (unsalted). Verify, then request upgrade.
+    if len(stored) == 64 and all(c in "0123456789abcdefABCDEF" for c in stored):
+        legacy = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+        return hmac.compare_digest(legacy, stored.lower()), True
+    return False, False
+
+
+def _csv_safe(value):
+    """Neutralize CSV/formula injection for values written to CSV files.
+
+    A leading =, +, -, @, tab or CR makes spreadsheet apps treat the cell as a
+    formula. Prefix such values with a single quote so they render as text.
+    """
+    s = "" if value is None else str(value)
+    if s[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + s
+    return s
+
+
 class LibertyKiosk(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -75,13 +130,32 @@ class LibertyKiosk(tk.Tk):
                 writer.writerow(["Raw_ID", "EDIPI", "Rank", "Last_Name", "First_Name", "Middle_Initial", "Phone", "PIN_hash"])
 
         if not ADMIN_HASH_FILE.exists():
-            default_hash = hashlib.sha256(DEFAULT_ADMIN_PASSWORD.encode()).hexdigest()
+            default_hash = hash_secret(DEFAULT_ADMIN_PASSWORD)
             with open(ADMIN_HASH_FILE, "w", encoding="utf-8") as f:
                 f.write(default_hash)
 
     def get_log_file(self):
         today = datetime.date.today()
         return DATA_DIR / "daily_logs" / f"liberty_log_{today.isoformat()}.csv"
+
+    def log_admin_action(self, action, detail="", actor="admin"):
+        """Append an entry to the standalone admin audit trail.
+
+        Kept separate from the liberty logs so it never corrupts their column
+        layout and gives a real record of who did what (logins, password
+        changes, force check-ins, exports)."""
+        try:
+            new_file = not AUDIT_FILE.exists()
+            with open(AUDIT_FILE, "a", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                if new_file:
+                    writer.writerow(["Timestamp", "Actor", "Action", "Detail"])
+                writer.writerow([
+                    datetime.datetime.now().isoformat(timespec="seconds"),
+                    actor, action, _csv_safe(detail),
+                ])
+        except Exception as e:
+            print(f"[AUDIT ERROR] {e}")
 
     def load_profiles(self):
         profiles = {}
@@ -215,66 +289,6 @@ class LibertyKiosk(tk.Tk):
 
         tk.Button(win, text="Close", bg=USMC_GOLD, fg=USMC_DARK, command=win.destroy).pack(pady=10)
     
-    def force_check_in_from_admin(self):
-        """Called from Admin Menu"""
-        edipi = self.themed_askstring("Force Check-In", "Enter EDIPI of Marine to force check-in:")
-        if edipi and edipi.strip():
-            self.perform_force_checkin(edipi.strip())
-
-    def perform_force_checkin(self, edipi, parent_win=None):
-        """Core logic used by both Admin Menu and per-row buttons"""
-        if not edipi:
-            self.themed_showerror("Error", "EDIPI is required.")
-            return
-
-        reason = self.themed_askstring("Force Check-In Reason",
-                                       "Enter reason for this force check-in\n(e.g. lost CAC, returned without scanning):")
-        if not reason or not reason.strip():
-            self.themed_showerror("Error", "A reason is required for force check-in.")
-            return
-        reason = reason.strip()
-
-        confirm_msg = (f"Are you sure you want to FORCE CHECK-IN\n"
-                       f"EDIPI {edipi} ?\n\n"
-                       f"Reason: {reason}\n\n"
-                       f"This action must also be recorded in the physical OOD logbook per unit policy.")
-        if not self.themed_askyesno("CONFIRM FORCE CHECK-IN", confirm_msg):
-            return
-
-        # Update today's log
-        today = datetime.date.today()
-        log_file = DATA_DIR / "daily_logs" / f"liberty_log_{today.isoformat()}.csv"
-
-        if not log_file.exists():
-            self.themed_showerror("Error", "No liberty log found for today.")
-            return
-
-        updated = False
-        rows = []
-
-        with open(log_file, "r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            fieldnames = reader.fieldnames
-            for row in reader:
-                if row.get("EDIPI") == edipi and (not row.get("Time_in") or row.get("Time_in").strip() == ""):
-                    row["Time_in"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    row["Destination"] = f"{row.get('Destination', '')} [FORCE CHECK-IN: {reason}]".strip()
-                    updated = True
-                rows.append(row)
-
-        if updated:
-            with open(log_file, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(rows)
-
-            self.themed_showinfo("Success", f"✅ Marine {edipi} has been force checked-in.\nReason: {reason}")
-            if parent_win:
-                parent_win.destroy()   # close and refresh the View Out window
-                self.admin_view_out()  # reopen with updated list
-        else:
-            self.themed_showerror("Error", f"No checked-out Marine found with EDIPI {edipi}.")    
-    
     def admin_update_profile(self):
         search = self.themed_askstring("Update Profile", "Enter Name or EDIPI to search:")
         if not search: return
@@ -332,7 +346,7 @@ class LibertyKiosk(tk.Tk):
             self.themed_showerror("Error", "PINs do not match.")
             return
 
-        pin_hash = hashlib.sha256(new_pin.encode()).hexdigest()
+        pin_hash = hash_secret(new_pin)
         self.save_profile(raw_id, profile["EDIPI"], profile["Rank"], profile["Last_Name"],
                           profile["First_Name"], profile.get("Middle_Initial",""),
                           profile["Phone"], pin_hash)
@@ -598,7 +612,7 @@ class LibertyKiosk(tk.Tk):
                     self.themed_showerror("Error", "PIN must be 5-9 digits")
                     return
 
-                pin_hash = hashlib.sha256(pin.encode()).hexdigest()
+                pin_hash = hash_secret(pin)
                 self.save_profile(parsed["Raw_ID"], edipi, parsed["Rank"], last_var.get().strip(),
                                   first_var.get().strip(), mi_var.get().strip(),
                                   phone_var.get().strip(), pin_hash)
@@ -663,12 +677,13 @@ class LibertyKiosk(tk.Tk):
                         # Pull FULL buddy data from profile (correct EDIPI, names, etc.)
                         buddy_data = self.profiles[b_raw_id].copy()
                     else:
-                        # New buddy - create minimal profile
-                        self.save_profile(b_raw_id, b_parsed["EDIPI"], b_parsed["Rank"], b_parsed["Last_Name"],
-                                          b_parsed["First_Name"], b_parsed["Middle_Initial"], "UNKNOWN",
-                                          hashlib.sha256("00000".encode()).hexdigest())
-                        self.profiles = self.load_profiles()
-                        buddy_data = self.profiles[b_raw_id].copy()
+                        # New buddy not yet registered. Do NOT create a profile with a
+                        # guessable default PIN (the old code seeded "00000", which would
+                        # let anyone check that Marine in/out). Log them from the parsed
+                        # CAC data only; they register and pick their own PIN the first
+                        # time they use the kiosk themselves.
+                        buddy_data = dict(b_parsed)
+                        buddy_data["EDIPI"] = ""  # unknown until they register in person
                     group.append(buddy_data)
                     self.show_message(f"✅ {buddy_data['Full_Name']} added to group", USMC_GOLD, 2)
                 except Exception:
@@ -688,7 +703,17 @@ class LibertyKiosk(tk.Tk):
         self.after(3000, self.build_main_screen)
 
     def verify_pin(self, profile, pin):
-        return profile["PIN_hash"] == hashlib.sha256(pin.encode()).hexdigest()
+        valid, needs_upgrade = verify_secret(pin, profile.get("PIN_hash", ""))
+        if valid and needs_upgrade:
+            try:
+                self.save_profile(profile["Raw_ID"], profile["EDIPI"], profile["Rank"],
+                                  profile["Last_Name"], profile["First_Name"],
+                                  profile.get("Middle_Initial", ""), profile["Phone"],
+                                  hash_secret(pin))
+                self.profiles = self.load_profiles()
+            except Exception as e:
+                print(f"[PIN UPGRADE ERROR] {e}")
+        return valid
 
     def find_open_entry(self, edipi):
         for i in range(7):
@@ -766,7 +791,7 @@ class LibertyKiosk(tk.Tk):
                     "Buddy_EDIPI": buddy_edipi,
                     "Buddy_Last_Name": buddy_last,
                     "Buddy_First_Name": buddy_first,
-                    "Destination": destination,
+                    "Destination": _csv_safe(destination),
                     "Time_out": now_str,
                     "Time_in": ""
                 }
@@ -804,15 +829,24 @@ class LibertyKiosk(tk.Tk):
                       bg="#8B0000", fg="white",
                       font=("Helvetica", 16, "bold"), width=40, height=2,
                       command=lambda: (admin_win.destroy(), self.superuser_change_superuser_password())).pack(pady=8)
+        elif not Path(SUPERUSER_HASH_FILE).exists():
+            # Break-glass bootstrap: if no superuser password is set yet (e.g. the
+            # exposed hash was removed and rotated), let an authenticated admin
+            # establish one. The button disappears once the file exists.
+            tk.Button(admin_win, text="⚙️ SET SUPERUSER PASSWORD (first-time setup)",
+                      bg="#8B0000", fg="white",
+                      font=("Helvetica", 16, "bold"), width=40, height=2,
+                      command=lambda: (admin_win.destroy(), self.superuser_change_superuser_password())).pack(pady=8)
 
         # Regular admin options + new Force Check-In
         buttons = [
             ("1. Update Marine Profile", self.admin_update_profile),
             ("2. Reset Marine PIN", self.admin_reset_pin),
             ("3. Force Check-In Marine", self.force_check_in_from_admin),
-            ("4. Verify Backups (Integrity Check)", self.launch_backup_verifier),
-            ("5. Export Logs & Backups to USB", self.admin_export_to_usb),
-            ("6. Exit Kiosk", self.admin_shutdown)
+            ("4. Change Admin Password", self.admin_change_password),
+            ("5. Verify Backups (Integrity Check)", self.launch_backup_verifier),
+            ("6. Export Logs & Backups to USB", self.admin_export_to_usb),
+            ("7. Exit Kiosk", self.admin_shutdown)
         ]
         for text, cmd in buttons:
             tk.Button(admin_win, text=text, bg=USMC_GOLD, fg=USMC_DARK,
@@ -834,10 +868,11 @@ class LibertyKiosk(tk.Tk):
             self.themed_showerror("Error", "Passwords do not match.")
             return
 
-        new_hash = hashlib.sha256(new_pwd.encode()).hexdigest()
+        new_hash = hash_secret(new_pwd)
         with open(ADMIN_HASH_FILE, "w", encoding="utf-8") as f:
             f.write(new_hash)
 
+        self.log_admin_action("ADMIN_PW_RESET", actor="superuser")
         self.themed_showinfo("Success", "✅ Admin password has been reset.")
 
     def superuser_change_superuser_password(self):
@@ -852,11 +887,12 @@ class LibertyKiosk(tk.Tk):
             self.themed_showerror("Error", "Passwords do not match.")
             return
 
-        new_hash = hashlib.sha256(new_pwd.encode()).hexdigest()
+        new_hash = hash_secret(new_pwd)
         with open(SUPERUSER_HASH_FILE, "w", encoding="utf-8") as f:
             f.write(new_hash)
 
-        self.themed_showinfo("Success", "✅ Superuser password has been changed.\n\nOnly you know it now.")    
+        self.log_admin_action("SUPERUSER_PW_CHANGE", actor="superuser")
+        self.themed_showinfo("Success", "✅ Superuser password has been changed.\n\nOnly you know it now.")
     
     def launch_backup_verifier(self):
         try:
@@ -872,27 +908,59 @@ class LibertyKiosk(tk.Tk):
             if not pwd:
                 return False
 
-            entered_hash = hashlib.sha256(pwd.encode()).hexdigest()
-
             # Check normal admin password
-            with open(ADMIN_HASH_FILE, "r", encoding="utf-8") as f:
-                if entered_hash == f.read().strip():
-                    return True
+            try:
+                admin_stored = ADMIN_HASH_FILE.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                admin_stored = ""
+            valid, needs_upgrade = verify_secret(pwd, admin_stored)
+            if valid:
+                if needs_upgrade:
+                    try:
+                        ADMIN_HASH_FILE.write_text(hash_secret(pwd), encoding="utf-8")
+                    except Exception as e:
+                        print(f"[ADMIN HASH UPGRADE ERROR] {e}")
+                self.log_admin_action("LOGIN", actor="admin")
+                return True
 
             # Check superuser password
             try:
-                with open(SUPERUSER_HASH_FILE, "r", encoding="utf-8") as f:
-                    if entered_hash == f.read().strip():
-                        self.is_superuser = True
-                        return True
+                su_stored = Path(SUPERUSER_HASH_FILE).read_text(encoding="utf-8")
             except FileNotFoundError:
-                pass  # superuser file not created yet
+                su_stored = ""
+            su_valid, su_upgrade = verify_secret(pwd, su_stored)
+            if su_valid:
+                self.is_superuser = True
+                if su_upgrade:
+                    try:
+                        Path(SUPERUSER_HASH_FILE).write_text(hash_secret(pwd), encoding="utf-8")
+                    except Exception as e:
+                        print(f"[SUPERUSER HASH UPGRADE ERROR] {e}")
+                self.log_admin_action("LOGIN", "superuser", actor="superuser")
+                return True
 
             self.themed_showerror("Error", "Incorrect password")
+        self.log_admin_action("LOGIN_FAILED", "3 incorrect attempts", actor="unknown")
         return False
 
     def admin_change_password(self):
-        self.themed_showinfo("Change Password", "Change Admin Password")
+        new_pwd = self.themed_askstring("Change Admin Password",
+                                        "Enter NEW Admin Password (min 8 chars):", show='*')
+        if not new_pwd or len(new_pwd) < 8:
+            self.themed_showerror("Error", "Admin password must be at least 8 characters.")
+            return
+        confirm = self.themed_askstring("Confirm", "Confirm NEW Admin Password:", show='*')
+        if new_pwd != confirm:
+            self.themed_showerror("Error", "Passwords do not match.")
+            return
+        try:
+            ADMIN_HASH_FILE.write_text(hash_secret(new_pwd), encoding="utf-8")
+        except Exception as e:
+            self.themed_showerror("Error", f"Could not save password:\n{e}")
+            return
+        self.log_admin_action("ADMIN_PW_CHANGE",
+                              actor=("superuser" if getattr(self, 'is_superuser', False) else "admin"))
+        self.themed_showinfo("Success", "✅ Admin password changed.")
         
     def force_check_in_from_admin(self):
         """Called from Admin Menu"""
@@ -926,39 +994,51 @@ class LibertyKiosk(tk.Tk):
         if not self.themed_askyesno("CONFIRM FORCE CHECK-IN", confirm_msg):
             return
 
-        # Update today's log
-        today = datetime.date.today()
-        log_file = DATA_DIR / "daily_logs" / f"liberty_log_{today.isoformat()}.csv"
+        # Search the same 7-day window the View-Out screen uses. A Marine who went
+        # out last night and never scanned back in has their open entry in
+        # YESTERDAY's log, so only checking today's file would miss the most
+        # common force-check-in case.
+        target_file = None
+        fieldnames = None
+        rows = []
+        for i in range(7):
+            d = datetime.date.today() - datetime.timedelta(days=i)
+            log_file = DATA_DIR / "daily_logs" / f"liberty_log_{d.isoformat()}.csv"
+            if not log_file.exists():
+                continue
+            with open(log_file, "r", newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                fn = reader.fieldnames
+                file_rows = list(reader)
+            has_open = any(
+                r.get("EDIPI") == edipi and (not r.get("Time_in") or str(r.get("Time_in")).strip() == "")
+                for r in file_rows
+            )
+            if has_open:
+                target_file, fieldnames, rows = log_file, fn, file_rows
+                break
 
-        if not log_file.exists():
-            self.themed_showerror("Error", "No liberty log found for today.")
+        if not target_file:
+            self.themed_showerror("Error", f"No checked-out Marine found with EDIPI {edipi}.")
             return
 
-        updated = False
-        rows = []
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for row in rows:
+            if row.get("EDIPI") == edipi and (not row.get("Time_in") or str(row.get("Time_in")).strip() == ""):
+                row["Time_in"] = now_str
+                row["Destination"] = _csv_safe(f"{row.get('Destination', '')} [FORCE CHECK-IN: {reason}]".strip())
 
-        with open(log_file, "r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            fieldnames = reader.fieldnames
-            for row in reader:
-                if row.get("EDIPI") == edipi and (not row.get("Time_in") or row.get("Time_in").strip() == ""):
-                    row["Time_in"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    row["Destination"] = f"{row.get('Destination', '')} [FORCE CHECK-IN: {reason}]".strip()
-                    updated = True
-                rows.append(row)
+        with open(target_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
 
-        if updated:
-            with open(log_file, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(rows)
-
-            self.themed_showinfo("Success", f"✅ Marine {edipi} has been force checked-in.\nReason: {reason}")
-            if parent_win:
-                parent_win.destroy()
-                self.admin_view_out()  # refresh the list
-        else:
-            self.themed_showerror("Error", f"No checked-out Marine found with EDIPI {edipi}.")
+        self.log_admin_action("FORCE_CHECKIN", f"EDIPI={edipi}; file={target_file.name}; reason={reason}",
+                              actor=("superuser" if getattr(self, 'is_superuser', False) else "admin"))
+        self.themed_showinfo("Success", f"✅ Marine {edipi} has been force checked-in.\nReason: {reason}")
+        if parent_win:
+            parent_win.destroy()
+            self.admin_view_out()  # refresh the list
 
     def admin_export_to_usb(self):
         if not self.themed_askyesno("⚠️ PII/CUI WARNING",
@@ -1031,11 +1111,9 @@ class LibertyKiosk(tk.Tk):
                 f"Folder created: {export_folder}\n\n"
                 "You may now safely remove the USB drive.")
 
-            log_file = self.get_log_file()
-            with open(log_file, "a", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow([datetime.datetime.now().isoformat(), "ADMIN_EXPORT", "USB", 
-                               f"Exported {exported_logs} logs ({range_text}) to {export_folder}"])
+            self.log_admin_action(
+                "EXPORT", f"{exported_logs} logs ({range_text}) -> {export_folder}",
+                actor=("superuser" if getattr(self, 'is_superuser', False) else "admin"))
         except Exception as e:
             self.themed_showerror("Export Error", f"Could not export files:\n{str(e)}")
 

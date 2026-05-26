@@ -103,5 +103,4 @@ for i in range(NUM_DAYS):
 print(f"\n🎉 DONE! Generated {NUM_DAYS} test log files with the NEW full buddy columns.")
 print(f"   Logs are in:      {LOGS_DIR}")
 print(f"   Backups + hashes in: {BACKUPS_DIR}")
-EOF
 
