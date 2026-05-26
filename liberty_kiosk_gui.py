@@ -132,8 +132,36 @@ class LibertyKiosk(tk.Tk):
 
         tk.Label(win, text="MARINES CURRENTLY ON LIBERTY", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 20, "bold")).pack(pady=10)
 
-        text = scrolledtext.ScrolledText(win, font=("Consolas", 11), bg="#001F3F", fg=USMC_GOLD, width=130, height=35)
-        text.pack(padx=20, pady=10)
+        # Scrollable container
+        canvas = tk.Canvas(win, bg=BG_COLOR, highlightthickness=0)
+        scrollbar = tk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg=BG_COLOR)
+
+        scroll_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True, padx=20, pady=10)
+        scrollbar.pack(side="right", fill="y")
+
+        # ==================== MOUSE WHEEL / TRACKPAD SUPPORT ====================
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def on_linux_scroll(event):
+            if event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+
+        canvas.bind_all("<MouseWheel>", on_mousewheel)      # Windows + macOS
+        canvas.bind_all("<Button-4>", on_linux_scroll)      # Linux scroll up
+        canvas.bind_all("<Button-5>", on_linux_scroll)      # Linux scroll down
+        # ======================================================================
 
         found = False
         marine_count = 0
@@ -151,29 +179,102 @@ class LibertyKiosk(tk.Tk):
                         found = True
                         marine_count += 1
 
-                        text.insert(tk.END, f"{'═' * 78}\n\n")
-                        text.insert(tk.END, f"MARINE #{marine_count}\n")
-                        text.insert(tk.END, f"Rank/Name    : {row['Rank']} {row['Name']}\n")
-                        text.insert(tk.END, f"EDIPI        : {row['EDIPI']}\n")
-                        text.insert(tk.END, f"Destination  : {row.get('Destination', 'N/A')}\n")
-                        text.insert(tk.END, f"Time Out     : {row['Time_out']}\n\n")
+                        row_frame = tk.Frame(scroll_frame, bg="#001F3F", relief="ridge", bd=2)
+                        row_frame.pack(fill="x", pady=6, padx=10)
+
+                        info = tk.Frame(row_frame, bg="#001F3F")
+                        info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
+
+                        tk.Label(info, text=f"MARINE #{marine_count}", fg=USMC_GOLD, bg="#001F3F",
+                                 font=("Helvetica", 11, "bold")).pack(anchor="w")
+                        tk.Label(info, text=f"{row['Rank']} {row['Name']}", fg="white", bg="#001F3F",
+                                 font=("Helvetica", 13, "bold")).pack(anchor="w")
+                        tk.Label(info, text=f"EDIPI: {row['EDIPI']}", fg="#AAAAAA", bg="#001F3F",
+                                 font=("Helvetica", 11)).pack(anchor="w")
+                        tk.Label(info, text=f"Destination: {row.get('Destination', 'N/A')}", fg="white", bg="#001F3F",
+                                 font=("Helvetica", 11)).pack(anchor="w")
+                        tk.Label(info, text=f"Time Out: {row['Time_out']}", fg="#AAAAAA", bg="#001F3F",
+                                 font=("Helvetica", 11)).pack(anchor="w")
 
                         buddy_name = row.get("Buddy_Name", "")
                         if buddy_name and buddy_name != "Self":
                             buddy_edipi = row.get("Buddy_EDIPI", "")
-                            text.insert(tk.END, f"   └─ Buddy → {buddy_name} ({buddy_edipi})\n\n")
-                        else:
-                            text.insert(tk.END, "   (Solo)\n\n")
+                            tk.Label(info, text=f"Buddy → {buddy_name} ({buddy_edipi})", fg=USMC_GOLD, bg="#001F3F",
+                                     font=("Helvetica", 10)).pack(anchor="w")
 
-                        text.insert(tk.END, f"{'─' * 78}\n\n")
+                        # Small red Force button
+                        btn_frame = tk.Frame(row_frame, bg="#001F3F")
+                        btn_frame.pack(side="right", padx=12, pady=8)
+                        tk.Button(btn_frame, text="FORCE\nCHECK-IN", bg="#8B0000", fg="white",
+                                  font=("Helvetica", 9, "bold"), width=12, height=2,
+                                  command=lambda e=row['EDIPI'], w=win: self.force_check_in_with_password(e, w)).pack()
 
         if not found:
-            text.insert(tk.END, "No Marines currently on liberty.\n")
-
-        text.config(state="disabled")
+            tk.Label(scroll_frame, text="No Marines currently on liberty.", fg=USMC_GOLD, bg=BG_COLOR,
+                     font=("Helvetica", 14)).pack(pady=40)
 
         tk.Button(win, text="Close", bg=USMC_GOLD, fg=USMC_DARK, command=win.destroy).pack(pady=10)
+    
+    def force_check_in_from_admin(self):
+        """Called from Admin Menu"""
+        edipi = self.themed_askstring("Force Check-In", "Enter EDIPI of Marine to force check-in:")
+        if edipi and edipi.strip():
+            self.perform_force_checkin(edipi.strip())
 
+    def perform_force_checkin(self, edipi, parent_win=None):
+        """Core logic used by both Admin Menu and per-row buttons"""
+        if not edipi:
+            self.themed_showerror("Error", "EDIPI is required.")
+            return
+
+        reason = self.themed_askstring("Force Check-In Reason",
+                                       "Enter reason for this force check-in\n(e.g. lost CAC, returned without scanning):")
+        if not reason or not reason.strip():
+            self.themed_showerror("Error", "A reason is required for force check-in.")
+            return
+        reason = reason.strip()
+
+        confirm_msg = (f"Are you sure you want to FORCE CHECK-IN\n"
+                       f"EDIPI {edipi} ?\n\n"
+                       f"Reason: {reason}\n\n"
+                       f"This action must also be recorded in the physical OOD logbook per unit policy.")
+        if not self.themed_askyesno("CONFIRM FORCE CHECK-IN", confirm_msg):
+            return
+
+        # Update today's log
+        today = datetime.date.today()
+        log_file = DATA_DIR / "daily_logs" / f"liberty_log_{today.isoformat()}.csv"
+
+        if not log_file.exists():
+            self.themed_showerror("Error", "No liberty log found for today.")
+            return
+
+        updated = False
+        rows = []
+
+        with open(log_file, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+            for row in reader:
+                if row.get("EDIPI") == edipi and (not row.get("Time_in") or row.get("Time_in").strip() == ""):
+                    row["Time_in"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    row["Destination"] = f"{row.get('Destination', '')} [FORCE CHECK-IN: {reason}]".strip()
+                    updated = True
+                rows.append(row)
+
+        if updated:
+            with open(log_file, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            self.themed_showinfo("Success", f"✅ Marine {edipi} has been force checked-in.\nReason: {reason}")
+            if parent_win:
+                parent_win.destroy()   # close and refresh the View Out window
+                self.admin_view_out()  # reopen with updated list
+        else:
+            self.themed_showerror("Error", f"No checked-out Marine found with EDIPI {edipi}.")    
+    
     def admin_update_profile(self):
         search = self.themed_askstring("Update Profile", "Enter Name or EDIPI to search:")
         if not search: return
@@ -252,31 +353,7 @@ class LibertyKiosk(tk.Tk):
         dlg.transient(self)
         return dlg
 
-    def themed_askstring(self, title, prompt, show=None):
-        dlg = self._create_themed_toplevel(title, BG_COLOR)
-        result = [None]
-        tk.Label(dlg, text=prompt, fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 18, "bold"), wraplength=650).pack(pady=30)
-        entry = tk.Entry(dlg, font=("Helvetica", 18), width=40, show=show, justify="center")
-        entry.pack(pady=10)
-        entry.focus_set()
-
-        def submit():
-            result[0] = entry.get()
-            dlg.destroy()
-        def cancel():
-            result[0] = None
-            dlg.destroy()
-
-        btn_frame = tk.Frame(dlg, bg=BG_COLOR)
-        btn_frame.pack(pady=30)
-        tk.Button(btn_frame, text="OK", bg=USMC_GOLD, fg=USMC_DARK, font=("Helvetica", 14, "bold"), width=12, height=2, command=submit).pack(side="left", padx=20)
-        tk.Button(btn_frame, text="Cancel", bg=USMC_RED, fg="white", font=("Helvetica", 14, "bold"), width=12, height=2, command=cancel).pack(side="left", padx=20)
-
-        dlg.bind("<Return>", lambda e: submit())
-        dlg.bind("<Escape>", lambda e: cancel())
-        dlg.wait_window(dlg)
-        return result[0]
-
+    
     def themed_showinfo(self, title, message):
         dlg = self._create_themed_toplevel(title, BG_COLOR)
         tk.Label(dlg, text=message, fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 16, "bold"), wraplength=620).pack(pady=40)
@@ -291,24 +368,84 @@ class LibertyKiosk(tk.Tk):
         dlg.bind("<Return>", lambda e: dlg.destroy())
         dlg.wait_window(dlg)
 
+    def themed_askstring(self, title, prompt, show=None):
+        dlg = self._create_themed_toplevel(title, BG_COLOR)
+        result = [None]
+
+        tk.Label(dlg, text=prompt, fg=USMC_GOLD, bg=BG_COLOR,
+                 font=("Helvetica", 18, "bold"), wraplength=650).pack(pady=30)
+
+        entry = tk.Entry(dlg, font=("Helvetica", 18), width=40,
+                         show=show, justify="center")
+        entry.pack(pady=10)
+
+        def submit():
+            result[0] = entry.get()
+            dlg.destroy()
+
+        def cancel():
+            result[0] = None
+            dlg.destroy()
+
+        btn_frame = tk.Frame(dlg, bg=BG_COLOR)
+        btn_frame.pack(pady=30)
+        tk.Button(btn_frame, text="OK", bg=USMC_GOLD, fg=USMC_DARK,
+                  font=("Helvetica", 14, "bold"), width=12, height=2,
+                  command=submit).pack(side="left", padx=20)
+        tk.Button(btn_frame, text="Cancel", bg=USMC_RED, fg="white",
+                  font=("Helvetica", 14, "bold"), width=12, height=2,
+                  command=cancel).pack(side="left", padx=20)
+
+        # ==================== AUTO-FOCUS FIX ====================
+        entry.bind("<Return>", lambda e: submit())
+        dlg.bind("<Return>", lambda e: submit())
+        dlg.bind("<Escape>", lambda e: cancel())
+
+        # Force focus on the entry box AFTER the dialog is fully drawn
+        def force_focus():
+            entry.focus_force()
+            entry.select_range(0, tk.END)   # selects the whole field (ready to type)
+            entry.icursor(tk.END)
+
+        dlg.after(10, force_focus)          # small delay guarantees it works
+        dlg.grab_set()
+        dlg.focus_force()
+        dlg.wait_window(dlg)
+        return result[0]
+    
     def themed_askyesno(self, title, message):
         dlg = self._create_themed_toplevel(title, BG_COLOR)
         result = [False]
-        tk.Label(dlg, text=message, fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 16, "bold"), wraplength=620).pack(pady=40)
 
-        def yes(): result[0] = True; dlg.destroy()
-        def no(): result[0] = False; dlg.destroy()
+        tk.Label(dlg, text=message, fg=USMC_GOLD, bg=BG_COLOR,
+                 font=("Helvetica", 16, "bold"), wraplength=620).pack(pady=40)
+
+        def yes():
+            result[0] = True
+            dlg.destroy()
+
+        def no():
+            result[0] = False
+            dlg.destroy()
 
         btn_frame = tk.Frame(dlg, bg=BG_COLOR)
         btn_frame.pack(pady=20)
-        tk.Button(btn_frame, text="YES", bg=USMC_GOLD, fg=USMC_DARK, font=("Helvetica", 14, "bold"), width=12, height=2, command=yes).pack(side="left", padx=30)
-        tk.Button(btn_frame, text="NO", bg=USMC_RED, fg="white", font=("Helvetica", 14, "bold"), width=12, height=2, command=no).pack(side="left", padx=30)
+        tk.Button(btn_frame, text="YES", bg=USMC_GOLD, fg=USMC_DARK,
+                  font=("Helvetica", 14, "bold"), width=12, height=2,
+                  command=yes).pack(side="left", padx=30)
+        tk.Button(btn_frame, text="NO", bg=USMC_RED, fg="white",
+                  font=("Helvetica", 14, "bold"), width=12, height=2,
+                  command=no).pack(side="left", padx=30)
 
+        # Improved Enter key support
         dlg.bind("<Return>", lambda e: yes())
         dlg.bind("<Escape>", lambda e: no())
+
+        dlg.grab_set()
+        dlg.focus_force()
         dlg.wait_window(dlg)
         return result[0]
-
+    
     def build_main_screen(self):
         for widget in self.winfo_children(): widget.destroy()
         header = tk.Frame(self, bg=USMC_RED, height=140)
@@ -655,7 +792,6 @@ class LibertyKiosk(tk.Tk):
         admin_win.grab_set()
         admin_win.lift()
         admin_win.focus_force()
-
         tk.Label(admin_win, text="🔐 ADMIN MENU", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 28, "bold")).pack(pady=20)
 
         # Superuser-only buttons (only you see these)
@@ -664,19 +800,19 @@ class LibertyKiosk(tk.Tk):
                       bg="#8B0000", fg="white",
                       font=("Helvetica", 16, "bold"), width=40, height=2,
                       command=lambda: (admin_win.destroy(), self.superuser_reset_admin_password())).pack(pady=8)
-
             tk.Button(admin_win, text="🔥 CHANGE SUPERUSER PASSWORD",
                       bg="#8B0000", fg="white",
                       font=("Helvetica", 16, "bold"), width=40, height=2,
                       command=lambda: (admin_win.destroy(), self.superuser_change_superuser_password())).pack(pady=8)
 
-        # Regular admin options (no password change anymore)
+        # Regular admin options + new Force Check-In
         buttons = [
             ("1. Update Marine Profile", self.admin_update_profile),
             ("2. Reset Marine PIN", self.admin_reset_pin),
-            ("3. Verify Backups (Integrity Check)", self.launch_backup_verifier),
-            ("4. Export Logs & Backups to USB", self.admin_export_to_usb),
-            ("5. Exit Kiosk", self.admin_shutdown)
+            ("3. Force Check-In Marine", self.force_check_in_from_admin),
+            ("4. Verify Backups (Integrity Check)", self.launch_backup_verifier),
+            ("5. Export Logs & Backups to USB", self.admin_export_to_usb),
+            ("6. Exit Kiosk", self.admin_shutdown)
         ]
         for text, cmd in buttons:
             tk.Button(admin_win, text=text, bg=USMC_GOLD, fg=USMC_DARK,
@@ -757,6 +893,72 @@ class LibertyKiosk(tk.Tk):
 
     def admin_change_password(self):
         self.themed_showinfo("Change Password", "Change Admin Password")
+        
+    def force_check_in_from_admin(self):
+        """Called from Admin Menu"""
+        edipi = self.themed_askstring("Force Check-In", "Enter EDIPI of Marine to force check-in:")
+        if edipi and edipi.strip():
+            self.perform_force_checkin(edipi.strip())
+    
+    def force_check_in_with_password(self, edipi, parent_win=None):
+        """Requires admin password BEFORE allowing force check-in (used by View Out buttons)"""
+        if not self.verify_admin_password():
+            return
+        self.perform_force_checkin(edipi, parent_win)
+    
+    def perform_force_checkin(self, edipi, parent_win=None):
+        """Core logic used by both Admin Menu and per-row buttons"""
+        if not edipi:
+            self.themed_showerror("Error", "EDIPI is required.")
+            return
+
+        reason = self.themed_askstring("Force Check-In Reason",
+                                       "Enter reason for this force check-in\n(e.g. lost CAC, returned without scanning):")
+        if not reason or not reason.strip():
+            self.themed_showerror("Error", "A reason is required for force check-in.")
+            return
+        reason = reason.strip()
+
+        confirm_msg = (f"Are you sure you want to FORCE CHECK-IN\n"
+                       f"EDIPI {edipi} ?\n\n"
+                       f"Reason: {reason}\n\n"
+                       f"This action must also be recorded in the physical OOD logbook per unit policy.")
+        if not self.themed_askyesno("CONFIRM FORCE CHECK-IN", confirm_msg):
+            return
+
+        # Update today's log
+        today = datetime.date.today()
+        log_file = DATA_DIR / "daily_logs" / f"liberty_log_{today.isoformat()}.csv"
+
+        if not log_file.exists():
+            self.themed_showerror("Error", "No liberty log found for today.")
+            return
+
+        updated = False
+        rows = []
+
+        with open(log_file, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+            for row in reader:
+                if row.get("EDIPI") == edipi and (not row.get("Time_in") or row.get("Time_in").strip() == ""):
+                    row["Time_in"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    row["Destination"] = f"{row.get('Destination', '')} [FORCE CHECK-IN: {reason}]".strip()
+                    updated = True
+                rows.append(row)
+
+        if updated:
+            with open(log_file, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            self.themed_showinfo("Success", f"✅ Marine {edipi} has been force checked-in.\nReason: {reason}")
+            if parent_win:
+                parent_win.destroy()
+                self.admin_view_out()  # refresh the list
+        else:
+            self.themed_showerror("Error", f"No checked-out Marine found with EDIPI {edipi}.")
 
     def admin_export_to_usb(self):
         if not self.themed_askyesno("⚠️ PII/CUI WARNING",
