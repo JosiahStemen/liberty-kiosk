@@ -110,15 +110,18 @@ class BackupVerifier(tk.Tk):
         stored_hash = hash_file.read_text().strip()
 
         if current_hash == stored_hash:
-            self.result_text.insert(tk.END, "✅ VERIFICATION SUCCESSFUL - FILE IS UNTOUCHED\n\n", "green")
-            self.result_text.insert(tk.END, "Technical Details:\n")
-            self.result_text.insert(tk.END, "• Algorithm used: SHA-256 (256-bit Secure Hash Algorithm)\n")
-            self.result_text.insert(tk.END, "• Hash type: Cryptographic one-way function\n")
-            self.result_text.insert(tk.END, "• Any change to even a single character in the log would produce a completely different hash\n")
-            self.result_text.insert(tk.END, "• This provides mathematically verifiable proof of data integrity\n")
-            self.result_text.insert(tk.END, "• Accepted standard by DoD, courts, and federal agencies for chain-of-custody\n\n")
-            self.result_text.insert(tk.END, "This backup is 100% identical to the original file created at 02:00 AM on the backup date.\n")
-            self.result_text.insert(tk.END, "You can confidently present this report as evidence.")
+            self.result_text.insert(tk.END, "✅ VERIFICATION SUCCESSFUL - HASH MATCHES STORED VALUE\n\n", "green")
+            self.result_text.insert(tk.END, "What this means:\n")
+            self.result_text.insert(tk.END, "• Algorithm: SHA-256 (256-bit Secure Hash Algorithm)\n")
+            self.result_text.insert(tk.END, "• The backup is byte-for-byte identical to the hash recorded when it was created.\n")
+            self.result_text.insert(tk.END, "• Any change to even a single character would produce a completely different hash.\n")
+            self.result_text.insert(tk.END, "• This reliably detects accidental corruption, truncation, or bit-rot.\n\n")
+            self.result_text.insert(tk.END, "Limitations (important):\n", "red")
+            self.result_text.insert(tk.END, "• The .sha256 file is stored next to the .bak. Anyone who can modify the backup\n")
+            self.result_text.insert(tk.END, "  can also recompute and overwrite this hash, so a match is NOT, by itself, proof\n")
+            self.result_text.insert(tk.END, "  against deliberate tampering.\n")
+            self.result_text.insert(tk.END, "• For evidentiary / chain-of-custody use, store the hashes off-box (or sign them)\n")
+            self.result_text.insert(tk.END, "  and follow your unit's records-management policy.")
         else:
             self.result_text.insert(tk.END, "❌ VERIFICATION FAILED - FILE HAS BEEN MODIFIED\n", "red")
 

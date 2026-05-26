@@ -49,7 +49,8 @@ Available functions:
 
 Update Marine Profile
 Reset Marine PIN
-Force Check-In Marine ← New OOD Override
+Force Check-In Marine ← OOD Override (searches the last 7 days)
+Change Admin Password ← any admin can now rotate the shared password
 Verify Backups (Integrity Check)
 Export Logs & Backups to USB
 Exit Kiosk
@@ -76,17 +77,21 @@ textliberty-kiosk/
 ├── backup_verifier.py            # Backup integrity checker
 ├── create_test_data.py           # Generate realistic test logs
 ├── README.md
-├── admin_hash.txt                # Shared admin password hash
-├── superuser_hash.txt            # Your private superuser hash
-└── liberty_data/                 # Auto-created at runtime
+├── .gitignore                    # Keeps PII/CUI + credential hashes out of git
+├── superuser_hash.txt            # Private superuser hash (gitignored — never commit)
+└── liberty_data/                 # Auto-created at runtime (gitignored)
     ├── profiles.csv              # All Marine profiles
+    ├── admin.hash                # Shared admin password hash (salted PBKDF2)
+    ├── admin_audit.csv           # Admin action audit trail (logins, exports, etc.)
     ├── daily_logs/               # Daily liberty logs (CSV)
     └── backups/                  # Daily backups + SHA256 hashes
 ⚠️ Important: Do not manually delete or modify files in liberty_data/.
 
 🛡️ Security
 
-All PINs and admin/superuser passwords stored as SHA-256 hashes
+All PINs and admin/superuser passwords stored as salted PBKDF2-HMAC-SHA256 hashes (legacy SHA-256 hashes auto-upgrade on next successful login)
+Credential hashes and all PII/CUI are excluded from git via .gitignore — never commit liberty_data/ or the hash files
+Admin actions (logins, password changes, force check-ins, exports) are recorded in liberty_data/admin_audit.csv
 No full CAC data stored — only parsed name/rank/EDIPI
 Daily automated backups with cryptographic integrity verification
 Export function includes strong PII/CUI warnings
