@@ -16,6 +16,15 @@ class BackupVerifier(tk.Tk):
         self.configure(bg=BG_COLOR)
         self.geometry("1150x800")
 
+        # Force the window to the very top (works even when launched from another Tkinter app)
+        self.update_idletasks()          # helps on some platforms
+        self.lift()                      # bring window forward
+        self.attributes('-topmost', True)  # temporarily make it stay on top
+        self.focus_force()               # steal keyboard focus
+
+        # (Optional but recommended) Remove the "always on top" after a short delay
+        # so it doesn't stay stuck on top forever
+        self.after(300, lambda: self.attributes('-topmost', False))
         self.script_dir = Path(__file__).parent
         self.backup_dir = None
         possible = [
