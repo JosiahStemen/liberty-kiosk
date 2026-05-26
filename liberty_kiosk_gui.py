@@ -42,6 +42,9 @@ DATA_DIR = Path("liberty_data")
 PROFILES_FILE = DATA_DIR / "profiles.csv"
 ADMIN_HASH_FILE = DATA_DIR / "admin.hash"
 DEFAULT_ADMIN_PASSWORD = "LibertyKiosk2026!"
+# ==================== SUPERUSER (BREAK-GLASS) ====================
+SUPERUSER_HASH_FILE = "superuser_hash.txt"
+# Only you know this password. You can change it anytime from the Admin Menu.
 
 class LibertyKiosk(tk.Tk):
     def __init__(self):
@@ -308,33 +311,37 @@ class LibertyKiosk(tk.Tk):
 
     def build_main_screen(self):
         for widget in self.winfo_children(): widget.destroy()
-
         header = tk.Frame(self, bg=USMC_RED, height=140)
         header.pack(fill="x")
         header.pack_propagate(False)
         tk.Label(header, text="UNITED STATES MARINE CORPS", fg=USMC_GOLD, bg=USMC_RED, font=("Helvetica", 28, "bold")).pack(pady=8)
         tk.Label(header, text="MARDET-MONTEREY LIBERTY KIOSK", fg="white", bg=USMC_RED, font=("Helvetica", 36, "bold")).pack()
-
         main = tk.Frame(self, bg=BG_COLOR)
         main.pack(fill="both", expand=True, padx=40, pady=40)
-
         tk.Label(main, text="SCAN THE FRONT OF YOUR CAC", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 48, "bold")).pack(pady=60)
         tk.Label(main, text="Hold the FRONT of your CAC in front of the scanner", fg="white", bg=BG_COLOR, font=("Helvetica", 24)).pack()
-
         self.scan_entry = tk.Entry(main, font=("Helvetica", 12), width=80, justify="center")
         self.scan_entry.pack(pady=30)
         self.scan_entry.bind("<Return>", self.process_scan)
-
         self.status_label = tk.Label(main, text="", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 18, "bold"), wraplength=1100)
         self.status_label.pack(pady=40)
 
+        # ==================== UPDATED FOOTER ====================
         footer = tk.Frame(self, bg=BG_COLOR)
         footer.pack(side="bottom", fill="x", pady=20, padx=30)
+
         tk.Label(footer, text="Scanner ready - FRONT of CAC only", fg="#666666", bg=BG_COLOR, font=("Helvetica", 12)).pack(side="left")
 
+        # New button - moved to main screen
+        tk.Button(footer, text="VIEW MARINES OUT", bg=USMC_GOLD, fg=USMC_DARK,
+                  font=("Helvetica", 11, "bold"), width=18, height=1,
+                  command=self.admin_view_out).pack(side="right", padx=(0, 10))
+
+        # Admin button stays right next to it
         tk.Button(footer, text="ADMIN MENU", bg=USMC_GOLD, fg=USMC_DARK,
                   font=("Helvetica", 11, "bold"), width=14, height=1,
                   command=self.show_admin_menu).pack(side="right")
+        # =======================================================
 
         self.focus_scan_entry()
 
@@ -651,14 +658,25 @@ class LibertyKiosk(tk.Tk):
 
         tk.Label(admin_win, text="🔐 ADMIN MENU", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 28, "bold")).pack(pady=20)
 
+        # Superuser-only buttons (only you see these)
+        if getattr(self, 'is_superuser', False):
+            tk.Button(admin_win, text="🔥 RESET ADMIN PASSWORD",
+                      bg="#8B0000", fg="white",
+                      font=("Helvetica", 16, "bold"), width=40, height=2,
+                      command=lambda: (admin_win.destroy(), self.superuser_reset_admin_password())).pack(pady=8)
+
+            tk.Button(admin_win, text="🔥 CHANGE SUPERUSER PASSWORD",
+                      bg="#8B0000", fg="white",
+                      font=("Helvetica", 16, "bold"), width=40, height=2,
+                      command=lambda: (admin_win.destroy(), self.superuser_change_superuser_password())).pack(pady=8)
+
+        # Regular admin options (no password change anymore)
         buttons = [
-            ("1. View Marines Currently on Liberty", self.admin_view_out),
-            ("2. Update Marine Profile", self.admin_update_profile),
-            ("3. Reset Marine PIN", self.admin_reset_pin),
-            ("4. Change Admin Password", self.admin_change_password),
-            ("5. Verify Backups (Integrity Check)", self.launch_backup_verifier),
-            ("6. Export Logs & Backups to USB", self.admin_export_to_usb),
-            ("7. Exit Kiosk", self.admin_shutdown)
+            ("1. Update Marine Profile", self.admin_update_profile),
+            ("2. Reset Marine PIN", self.admin_reset_pin),
+            ("3. Verify Backups (Integrity Check)", self.launch_backup_verifier),
+            ("4. Export Logs & Backups to USB", self.admin_export_to_usb),
+            ("5. Exit Kiosk", self.admin_shutdown)
         ]
         for text, cmd in buttons:
             tk.Button(admin_win, text=text, bg=USMC_GOLD, fg=USMC_DARK,
@@ -667,7 +685,43 @@ class LibertyKiosk(tk.Tk):
 
         tk.Button(admin_win, text="Return to Kiosk", bg="#666666", fg="white",
                   font=("Helvetica", 14), command=admin_win.destroy).pack(pady=30)
+    
+    def superuser_reset_admin_password(self):
+        new_pwd = self.themed_askstring("Reset Admin Password",
+                                        "Enter NEW Admin Password:", show='*')
+        if not new_pwd or len(new_pwd) < 4:
+            self.themed_showerror("Error", "Password must be at least 4 characters.")
+            return
 
+        confirm = self.themed_askstring("Confirm", "Confirm NEW Admin Password:", show='*')
+        if new_pwd != confirm:
+            self.themed_showerror("Error", "Passwords do not match.")
+            return
+
+        new_hash = hashlib.sha256(new_pwd.encode()).hexdigest()
+        with open(ADMIN_HASH_FILE, "w", encoding="utf-8") as f:
+            f.write(new_hash)
+
+        self.themed_showinfo("Success", "✅ Admin password has been reset.")
+
+    def superuser_change_superuser_password(self):
+        new_pwd = self.themed_askstring("Change Superuser Password",
+                                        "Enter NEW Superuser Password:", show='*')
+        if not new_pwd or len(new_pwd) < 8:
+            self.themed_showerror("Error", "Superuser password must be at least 8 characters.")
+            return
+
+        confirm = self.themed_askstring("Confirm", "Confirm NEW Superuser Password:", show='*')
+        if new_pwd != confirm:
+            self.themed_showerror("Error", "Passwords do not match.")
+            return
+
+        new_hash = hashlib.sha256(new_pwd.encode()).hexdigest()
+        with open(SUPERUSER_HASH_FILE, "w", encoding="utf-8") as f:
+            f.write(new_hash)
+
+        self.themed_showinfo("Success", "✅ Superuser password has been changed.\n\nOnly you know it now.")    
+    
     def launch_backup_verifier(self):
         try:
             subprocess.Popen([sys.executable, "backup_verifier.py"])
@@ -676,13 +730,28 @@ class LibertyKiosk(tk.Tk):
             self.themed_showerror("Error", f"Could not launch verifier:\n{e}")
 
     def verify_admin_password(self):
+        self.is_superuser = False
         for _ in range(3):
             pwd = self.themed_askstring("Admin Login", "Enter Admin Password:", show='*')
-            if not pwd: return False
+            if not pwd:
+                return False
+
+            entered_hash = hashlib.sha256(pwd.encode()).hexdigest()
+
+            # Check normal admin password
             with open(ADMIN_HASH_FILE, "r", encoding="utf-8") as f:
-                stored = f.read().strip()
-            if hashlib.sha256(pwd.encode()).hexdigest() == stored:
-                return True
+                if entered_hash == f.read().strip():
+                    return True
+
+            # Check superuser password
+            try:
+                with open(SUPERUSER_HASH_FILE, "r", encoding="utf-8") as f:
+                    if entered_hash == f.read().strip():
+                        self.is_superuser = True
+                        return True
+            except FileNotFoundError:
+                pass  # superuser file not created yet
+
             self.themed_showerror("Error", "Incorrect password")
         return False
 
