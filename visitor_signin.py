@@ -6,7 +6,7 @@ Standalone Visitor Sign-In tool for MARDET-Monterey Liberty Kiosk.
 Launched from the main kiosk GUI (or run directly with: python visitor_signin.py).
 
 Requirements:
-- The host Marine MUST be currently checked out on liberty (open entry in liberty logs).
+- The host Marine must **NOT** be currently checked out on liberty.
 - Uses the exact same profile, hashing, CAC parsing, and logging logic as the main kiosk
   via liberty_common.py.
 
@@ -182,8 +182,7 @@ class VisitorSignInApp(tk.Tk):
         self.scan_frame.pack(fill="x", pady=10)
 
         self.status_label.config(
-            text="Scan the HOST MARINE's CAC card now.\n"
-                 "They must be present in the barracks (not checked out on liberty).",
+            text="Scan the HOST MARINE's CAC card now.",
             fg=USMC_GOLD
         )
         self.scan_entry.delete(0, tk.END)
@@ -211,7 +210,6 @@ class VisitorSignInApp(tk.Tk):
 
             # THE KEY REQUIREMENT:
             # Host Marine must NOT be checked out on liberty.
-            # They must be present in the barracks.
             open_entry, log_file = find_open_entry(real_edipi)
             if open_entry:
                 name = profile.get("Full_Name", "This Marine")

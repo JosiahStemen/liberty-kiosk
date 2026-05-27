@@ -11,14 +11,16 @@ This GUI application allows Marines to quickly check in and out for liberty usin
 - **PIN Authentication**: Secure 5-9 digit PIN for check-in/out
 - **Buddy System**: Check out with multiple Marines under one sponsor
 - **Destination Logging**: Required field for accountability
-- **View Marines Out on Main Screen**: Large button directly on the main kiosk screen
+- **View Marines Out on Main Screen**: Large button on the right side of the main screen.
+- **Visitor System**: "CHECK IN/OUT VISITOR" and "VIEW VISITOR LIST" buttons on the left side of the main screen. Host must not be checked out on liberty to sign in a visitor.
 - **Full Admin Panel**:
   - Force Check-In Marine (OOD override with reason + logbook warning)
   - Update Marine profiles (rank, name, phone, etc.)
   - Reset forgotten PINs
   - Verify backup integrity
-  - Export logs to USB (with PII warnings)
+  - Export All Logs & Backups to USB (includes liberty logs + visitor logs)
   - Safe kiosk shutdown
+- **Scrollable Admin Menu**
 - **Superuser Break-Glass Account** (J-Dizz only): Private password that works even if shared admin password changes
 - **Daily Logging & Automated Backups**: Logs all activity with daily CSV files + SHA-256 hashed backups
 - **USMC-Themed UI**: Red, gold, and dark blue color scheme
@@ -44,15 +46,15 @@ Phone number
 Profile is saved to liberty_data/profiles.csv
 
 🔐 Admin Menu
-Access: Click ADMIN MENU button (bottom right) → Enter shared admin password.
-Available functions:
+Access: Click ADMIN MENU button → Enter shared admin password.
+The Admin Menu is scrollable and includes:
 
 Update Marine Profile
 Reset Marine PIN
 Force Check-In Marine ← OOD Override (searches the last 7 days)
-Change Admin Password ← any admin can now rotate the shared password
+Change Admin Password
 Verify Backups (Integrity Check)
-Export Logs & Backups to USB
+Export All Logs & Backups to USB (includes liberty logs + visitor logs)
 Exit Kiosk
 
 Force Check-In (OOD Override)
@@ -72,10 +74,12 @@ When you log in with the superuser password, two extra red buttons appear at the
 Never share your superuser password or the superuser_hash.txt file.
 
 📁 Project Structure
-textliberty-kiosk/
+liberty-kiosk/
 ├── liberty_kiosk_gui.py          # Main kiosk application
-├── liberty_common.py             # Shared utilities (hashing, CAC parsing, profiles, etc.)
-├── visitor_signin.py             # Standalone Visitor Sign-In tool (launched from main GUI)
+├── kiosk_config.py               # Centralized configuration (paths, security settings, etc.)
+├── kiosk_ui.py                   # Shared themed UI components and dialogs
+├── liberty_common.py             # Shared utilities (hashing, CAC parsing, profile loading, etc.)
+├── visitor_signin.py             # Standalone Visitor Check-In/Out tool (launched from main GUI)
 ├── backup_verifier.py            # Backup integrity checker
 ├── create_test_data.py           # Generate realistic test logs
 ├── README.md
@@ -86,6 +90,7 @@ textliberty-kiosk/
     ├── admin.hash                # Shared admin password hash (salted PBKDF2)
     ├── admin_audit.csv           # Admin action audit trail (logins, exports, etc.)
     ├── daily_logs/               # Daily liberty logs (CSV)
+    ├── visitor logs/             # Visitor sign-in/check-out logs (separate folder)
     └── backups/                  # Daily backups + SHA256 hashes
 ⚠️ Important: Do not manually delete or modify files in liberty_data/.
 
@@ -102,10 +107,16 @@ Escape key opens admin menu (for quick access)
 🛠️ Additional Tools
 
 liberty_common.py
-Shared code used by the main kiosk and standalone tools (PIN hashing, CAC parsing, profile loading, "is on liberty?" checks, visitor logging, etc.). This is the foundation for the "better route" modular design.
+Shared code used by the main kiosk and standalone tools (PIN hashing, CAC parsing, profile loading, "is on liberty?" checks, visitor logging, etc.). This is the foundation for the modular design.
+
+kiosk_config.py
+Centralized configuration for paths, security settings, and helper functions.
+
+kiosk_ui.py
+Reusable themed UI components and dialogs for consistent red/gold styling across tools.
 
 visitor_signin.py
-Standalone Visitor Sign-In application. Launched by clicking "SIGN IN VISITOR" on the main kiosk. Requires the host Marine to be currently checked out on liberty (enforced).
+Standalone Visitor Check-In/Out application. Launched by clicking "CHECK IN/OUT VISITOR" on the main kiosk (left side). The host Marine must **not** be currently checked out on liberty to sign in a visitor (this is enforced). Supports both signing visitors in and checking them out.
 
 backup_verifier.py
 Launches a separate GUI to verify that backup files match their SHA-256 hashes.
@@ -121,14 +132,15 @@ Admin Menu buttons blank: Restart the program.
 Dialogs don't auto-focus: Fixed in latest version — you can now type immediately.
 Forgotten Admin Password: Use your superuser password to reset it instantly.
 
-📋 Recent Updates (May 2026)
+📋 Recent Changes
 
-VIEW MARINES OUT button moved to main screen for faster access
-Added Force Check-In feature with mandatory reason and OOD logbook warning
-Added Superuser break-glass account for emergency admin password reset
-Improved all dialogs (Enter key works + auto-focus on text fields)
-Admin Menu cleaned up and renumbered
+- Admin Menu is now fully scrollable
+- Combined export options into one unified "Export All Logs & Backups to USB"
+- Added dedicated Visitor Check-In/Out system with its own tool
+- Added `kiosk_config.py` and `kiosk_ui.py` for better architecture
+- Removed live status dashboard from main screen
+- Visitor buttons moved to left side and styled gold for consistency
+- Improved Zyn easter egg UPC accuracy
 
-
-Liberty Kiosk v1.1 - MARDET Monterey
+Liberty Kiosk - MARDET Monterey
 Semper Fidelis 🪖
