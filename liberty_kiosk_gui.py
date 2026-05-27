@@ -984,7 +984,7 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         Structure:
             LibertyKiosk_Export_YYYY-MM-DD_to_YYYY-MM-DD/
                 ├── Reports/
-                │   └── Daily/                   (Liberty and Visitor PDF per day)
+                │   └── Daily/                   (Liberty PDF per day only)
                 │   └── Visitor_Logs_Report.pdf  (combined visitor report)
                 └── Full_Integrity_Package/
                     ├── SourceData/              (raw daily_logs and visitor logs CSVs)
@@ -1052,7 +1052,9 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         export_folder.mkdir(parents=True, exist_ok=True)
 
         # === EXPORT STRUCTURE ===
-        # - Reports/ (Daily PDFs + combined Visitor report)
+        # - Reports/
+        #     - Daily/ (Liberty PDFs per day only)
+        #     - Visitor_Logs_Report.pdf (combined visitor report)
         # - Full_Integrity_Package/
         #     - SourceData/ (raw logs)
         #     - Backups/ (.bak + .sha256)
@@ -1141,7 +1143,9 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
                         continue
 
             # 4. Generate reports from the copied raw source data
-            self._generate_daily_split_reports(source_data_dir, reports_daily_dir, start_date, end_date, export_all)
+            #    Daily reports for Liberty only (user prefers combined visitor report only)
+            self._generate_daily_split_reports(source_data_dir, reports_daily_dir, start_date, end_date, export_all,
+                                               generate_visitor_daily=False)
 
             # Generate combined Visitor report (no combined Liberty report is created)
             self._generate_visitor_logs_report(reports_dir, start_date, end_date, export_all, source_base_dir=source_data_dir)
@@ -1194,8 +1198,8 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
                 f"Log Range: {range_text}\n\n"
                 f"MANIFEST.sha256: {manifest_hash[:16]}...\n\n"
                 f"Layout:\n"
-                f"• Reports/Daily/          ← Daily Liberty + Visitor PDFs\n"
-                f"• Reports/Visitor_Logs_Report.pdf (combined visitor)\n"
+                f"• Reports/Daily/          ← Daily Liberty PDFs only\n"
+                f"• Reports/Visitor_Logs_Report.pdf (combined visitor report)\n"
                 f"• Full_Integrity_Package/ ← SourceData (raw logs) + Backups + Evidence + Metadata\n\n"
                 f"Copy the whole folder to your archive drive.")
 
@@ -1640,13 +1644,15 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         return manifest_hash
 
     def _generate_daily_split_reports(self, source_data_dir: Path, reports_daily_dir: Path,
-                                      start_date, end_date, export_all: bool):
+                                      start_date, end_date, export_all: bool,
+                                      generate_visitor_daily: bool = True):
         """
         Generate separate PDF reports for each individual day.
         This is the primary format used for 6105s, NJPs, and routine admin actions.
-        Creates files like:
-            Reports/Daily/2026-05-18_Liberty_Report.pdf
-            Reports/Daily/2026-05-18_Visitor_Report.pdf
+
+        By default generates daily reports for both Liberty and Visitors.
+        Set generate_visitor_daily=False to only generate daily Liberty reports
+        (useful when only the combined visitor report is desired).
         """
         try:
             from reportlab.lib.pagesizes import letter
@@ -1722,45 +1728,46 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
                     pass
 
             # --- Visitor for this day ---
-            vis_src = base_dir / "visitor_logs" / f"visitor_log_{day_str}.csv"
-            if vis_src.exists():
-                try:
-                    with open(vis_src, "r", newline="", encoding="utf-8") as f:
-                        rows = list(csv.DictReader(f))
+            if generate_visitor_daily:
+                vis_src = base_dir / "visitor_logs" / f"visitor_log_{day_str}.csv"
+                if vis_src.exists():
+                    try:
+                        with open(vis_src, "r", newline="", encoding="utf-8") as f:
+                            rows = list(csv.DictReader(f))
 
-                    pdf_path = reports_daily_dir / f"{day_str}_Visitor_Report.pdf"
-                    doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
-                    story = []
+                        pdf_path = reports_daily_dir / f"{day_str}_Visitor_Report.pdf"
+                        doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
+                        story = []
 
-                    story.append(Paragraph(f"MARDET-MONTEREY - Visitor Log - {day_str}", styles['Heading2']))
-                    story.append(Spacer(1, 10))
+                        story.append(Paragraph(f"MARDET-MONTEREY - Visitor Log - {day_str}", styles['Heading2']))
+                        story.append(Spacer(1, 10))
 
-                    if rows:
-                        table_data = [["In Time", "Host", "Visitor", "Location", "Out Time"]]
-                        for row in rows:
-                            checked_out = row.get("Time_Out", "") or "Still Signed In"
-                            table_data.append([
-                                str(row.get("Timestamp", ""))[:16],
-                                f"{row.get('Host_Rank','')} {row.get('Host_Name','')}"[:22],
-                                str(row.get("Visitor_Name", ""))[:22],
-                                f"{row.get('Building','')}-{row.get('Room','')}",
-                                checked_out[:16]
-                            ])
-                        t = Table(table_data, colWidths=[1.1*inch, 1.6*inch, 1.6*inch, 1.0*inch, 1.3*inch])
-                        t.setStyle(TableStyle([
-                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#C8102E')),
-                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                            ('FONTSIZE', (0, 0), (-1, -1), 7),
-                            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                        ]))
-                        story.append(t)
-                    else:
-                        story.append(Paragraph("No visitor entries for this date.", styles['Normal']))
+                        if rows:
+                            table_data = [["In Time", "Host", "Visitor", "Location", "Out Time"]]
+                            for row in rows:
+                                checked_out = row.get("Time_Out", "") or "Still Signed In"
+                                table_data.append([
+                                    str(row.get("Timestamp", ""))[:16],
+                                    f"{row.get('Host_Rank','')} {row.get('Host_Name','')}"[:22],
+                                    str(row.get("Visitor_Name", ""))[:22],
+                                    f"{row.get('Building','')}-{row.get('Room','')}",
+                                    checked_out[:16]
+                                ])
+                            t = Table(table_data, colWidths=[1.1*inch, 1.6*inch, 1.6*inch, 1.0*inch, 1.3*inch])
+                            t.setStyle(TableStyle([
+                                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#C8102E')),
+                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                ('FONTSIZE', (0, 0), (-1, -1), 7),
+                                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                            ]))
+                            story.append(t)
+                        else:
+                            story.append(Paragraph("No visitor entries for this date.", styles['Normal']))
 
-                    doc.build(story)
-                except Exception:
-                    pass
+                        doc.build(story)
+                    except Exception:
+                        pass
 
     def _write_evidence_readme(self, target_dir: Path, range_text: str, manifest_hash: str):
         """Write clear instructions so anyone (lawyer, forensic examiner, court) knows how to use the package."""
@@ -1778,8 +1785,8 @@ FOLDER LAYOUT
 -------------
 Reports/
     - Daily/ folder
-        One PDF per day for Liberty logs and one PDF per day for Visitor logs
-        (e.g. 2026-05-18_Liberty_Report.pdf and 2026-05-18_Visitor_Report.pdf).
+        One PDF per day for Liberty logs only
+        (e.g. 2026-05-18_Liberty_Report.pdf).
 
     - Visitor_Logs_Report.pdf (combined visitor report for the selected date range)
 
@@ -1815,7 +1822,7 @@ CONTENTS OF THIS PACKAGE
 
 - Reports/
     - ChainOfCustody.pdf
-    - Daily/ folder containing one Liberty PDF and one Visitor PDF per day in the range
+    - Daily/ folder containing one Liberty PDF per day in the range
     - Visitor_Logs_Report.pdf (combined visitor report for the range)
 
 - Metadata/
