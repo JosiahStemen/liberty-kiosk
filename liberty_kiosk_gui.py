@@ -44,36 +44,24 @@ DATA_DIR = Path("liberty_data")
 PROFILES_FILE = DATA_DIR / "profiles.csv"
 ADMIN_HASH_FILE = DATA_DIR / "admin.hash"
 DEFAULT_ADMIN_PASSWORD = "LibertyKiosk2026!"
+
 # ====================== VISITOR LOGS (new) ======================
-VISITOR_LOGS_DIR = DATA_DIR / "daily_logs"  # same folder as liberty logs, different filename
+VISITOR_LOGS_DIR = DATA_DIR / "daily_logs"
 VISITOR_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
 # ==================== SUPERUSER (BREAK-GLASS) ====================
 SUPERUSER_HASH_FILE = "superuser_hash.txt"
-# Only you know this password. You can change it anytime from the Admin Menu.
-
 AUDIT_FILE = DATA_DIR / "admin_audit.csv"
 
 # ==================== PASSWORD / PIN HASHING ====================
-# PINs and admin/superuser passwords are stored as salted PBKDF2-HMAC-SHA256.
-# Legacy bare SHA-256 hashes (from older versions) are still accepted and are
-# transparently upgraded to the salted format on the next successful login.
 PBKDF2_ITERATIONS = 200_000
 
-
 def hash_secret(secret: str) -> str:
-    """Hash a PIN/password with a per-secret random salt (PBKDF2-HMAC-SHA256)."""
     salt = os.urandom(16)
     dk = hashlib.pbkdf2_hmac("sha256", secret.encode("utf-8"), salt, PBKDF2_ITERATIONS)
     return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt.hex()}${dk.hex()}"
 
-
 def verify_secret(secret: str, stored: str):
-    """Verify a secret against a stored hash.
-
-    Returns (is_valid, needs_upgrade). ``needs_upgrade`` is True when the stored
-    value is a legacy unsalted SHA-256 hash that matched, signalling the caller
-    to re-hash and persist it in the modern salted format.
-    """
     stored = (stored or "").strip()
     if not stored:
         return False, False
@@ -85,23 +73,17 @@ def verify_secret(secret: str, stored: str):
             return hmac.compare_digest(dk.hex(), hash_hex), False
         except Exception:
             return False, False
-    # Legacy: bare 64-char hex SHA-256 (unsalted). Verify, then request upgrade.
     if len(stored) == 64 and all(c in "0123456789abcdefABCDEF" for c in stored):
         legacy = hashlib.sha256(secret.encode("utf-8")).hexdigest()
         return hmac.compare_digest(legacy, stored.lower()), True
     return False, False
 
-
 def _csv_safe(value):
-    """Neutralize CSV/formula injection for values written to CSV files.
-
-    A leading =, +, -, @, tab or CR makes spreadsheet apps treat the cell as a
-    formula. Prefix such values with a single quote so they render as text.
-    """
     s = "" if value is None else str(value)
     if s[:1] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + s
     return s
+
 # ====================== NEW VISITOR LOGGING FUNCTIONS ======================
 def get_today_visitor_log_filename():
     return VISITOR_LOGS_DIR / f"visitor_log_{datetime.date.today().isoformat()}.csv"
@@ -120,6 +102,7 @@ def log_visitor_signin(host_rank, host_name, host_edipi, visitor_name, building,
     with open(log_file, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([timestamp, host_rank, host_name, host_edipi, visitor_name, building, room])
+
 # ====================== NEW VISITOR SIGN-IN WINDOW ======================
 class VisitorSignInWindow(tk.Toplevel):
     def __init__(self, parent, host_data):
@@ -167,6 +150,7 @@ class VisitorSignInWindow(tk.Toplevel):
 
         messagebox.showinfo("Success", f"Visitor {visitor_name} signed in to {building}-{room}\nby {self.host_data['rank']} {self.host_data['name']}")
         self.destroy()
+
 class LibertyKiosk(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -180,6 +164,7 @@ class LibertyKiosk(tk.Tk):
         self.profiles = self.load_profiles()
         self.current_user = None
         self.waiting_for_cac = None   # used for visitor flow
+
         self.build_main_screen()
         self.start_daily_backup_scheduler()
 
@@ -533,8 +518,11 @@ class LibertyKiosk(tk.Tk):
         header.pack_propagate(False)
         tk.Label(header, text="UNITED STATES MARINE CORPS", fg=USMC_GOLD, bg=USMC_RED, font=("Helvetica", 28, "bold")).pack(pady=8)
         tk.Label(header, text="MARDET-MONTEREY LIBERTY KIOSK", fg="white", bg=USMC_RED, font=("Helvetica", 36, "bold")).pack()
+
         main = tk.Frame(self, bg=BG_COLOR)
         main.pack(fill="both", expand=True, padx=40, pady=40)
+        self.main_frame = main   # ←←← FIXED: this line was missing
+
         tk.Label(main, text="SCAN THE FRONT OF YOUR CAC", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 48, "bold")).pack(pady=60)
         tk.Label(main, text="Hold the FRONT of your CAC in front of the scanner", fg="white", bg=BG_COLOR, font=("Helvetica", 24)).pack()
         self.scan_entry = tk.Entry(main, font=("Helvetica", 12), width=80, justify="center")
@@ -543,29 +531,28 @@ class LibertyKiosk(tk.Tk):
         self.status_label = tk.Label(main, text="", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 18, "bold"), wraplength=1100)
         self.status_label.pack(pady=40)
 
-        # ==================== UPDATED FOOTER ====================
+        # ==================== FOOTER ====================
         footer = tk.Frame(self, bg=BG_COLOR)
         footer.pack(side="bottom", fill="x", pady=20, padx=30)
 
         tk.Label(footer, text="Scanner ready - FRONT of CAC only", fg="#666666", bg=BG_COLOR, font=("Helvetica", 12)).pack(side="left")
 
-        # New button - moved to main screen
         tk.Button(footer, text="VIEW MARINES OUT", bg=USMC_GOLD, fg=USMC_DARK,
                   font=("Helvetica", 11, "bold"), width=18, height=1,
                   command=self.admin_view_out).pack(side="right", padx=(0, 10))
 
-        # Admin button stays right next to it
         tk.Button(footer, text="ADMIN MENU", bg=USMC_GOLD, fg=USMC_DARK,
                   font=("Helvetica", 11, "bold"), width=14, height=1,
                   command=self.show_admin_menu).pack(side="right")
-        # =======================================================
-        # NEW VISITOR BUTTON
-        self.add_visitor_button = tk.Button(self.main_frame, text="SIGN IN VISITOR",
-                                            font=("Arial", 14, "bold"), bg="#17a2b8", fg="white",
-                                            height=2, command=self.start_visitor_signin_flow)
-        self.add_visitor_button.pack(side="left", padx=10, pady=10)
-        self.focus_scan_entry()
 
+        # NEW VISITOR BUTTON (now correctly placed in footer)
+        self.add_visitor_button = tk.Button(footer, text="SIGN IN VISITOR",
+                                            font=("Helvetica", 11, "bold"), bg="#17a2b8", fg="white",
+                                            height=1, command=self.start_visitor_signin_flow)
+        self.add_visitor_button.pack(side="right", padx=10)
+
+        self.focus_scan_entry()
+    
     def focus_scan_entry(self):
         self.scan_entry.focus_set()
         self.scan_entry.delete(0, tk.END)
@@ -1244,10 +1231,10 @@ class LibertyKiosk(tk.Tk):
         with open(hash_file, "w", encoding="utf-8") as f:
             f.write(file_hash)
         print(f"✅ BACKUP SUCCESS: {yesterday}")
+
     def start_visitor_signin_flow(self):
         messagebox.showinfo("Host CAC", "Please scan your CAC now...")
         self.waiting_for_cac = "visitor_host"
-
     
 if __name__ == "__main__":
     def ignore(sig, frame): pass
