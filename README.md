@@ -74,6 +74,8 @@ Never share your superuser password or the superuser_hash.txt file.
 📁 Project Structure
 textliberty-kiosk/
 ├── liberty_kiosk_gui.py          # Main kiosk application
+├── liberty_common.py             # Shared utilities (hashing, CAC parsing, profiles, etc.)
+├── visitor_signin.py             # Standalone Visitor Sign-In tool (launched from main GUI)
 ├── backup_verifier.py            # Backup integrity checker
 ├── create_test_data.py           # Generate realistic test logs
 ├── README.md
@@ -99,8 +101,15 @@ Escape key opens admin menu (for quick access)
 
 🛠️ Additional Tools
 
+liberty_common.py
+Shared code used by the main kiosk and standalone tools (PIN hashing, CAC parsing, profile loading, "is on liberty?" checks, visitor logging, etc.). This is the foundation for the "better route" modular design.
+
+visitor_signin.py
+Standalone Visitor Sign-In application. Launched by clicking "SIGN IN VISITOR" on the main kiosk. Requires the host Marine to be currently checked out on liberty (enforced).
+
 backup_verifier.py
 Launches a separate GUI to verify that backup files match their SHA-256 hashes.
+
 create_test_data.py
 Generates realistic test data (logs + backups) for testing the system.
 
