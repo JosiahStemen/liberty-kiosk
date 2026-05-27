@@ -44,6 +44,9 @@ DATA_DIR = Path("liberty_data")
 PROFILES_FILE = DATA_DIR / "profiles.csv"
 ADMIN_HASH_FILE = DATA_DIR / "admin.hash"
 DEFAULT_ADMIN_PASSWORD = "LibertyKiosk2026!"
+# ====================== VISITOR LOGS (new) ======================
+VISITOR_LOGS_DIR = DATA_DIR / "daily_logs"  # same folder as liberty logs, different filename
+VISITOR_LOGS_DIR.mkdir(parents=True, exist_ok=True)
 # ==================== SUPERUSER (BREAK-GLASS) ====================
 SUPERUSER_HASH_FILE = "superuser_hash.txt"
 # Only you know this password. You can change it anytime from the Admin Menu.
@@ -99,8 +102,71 @@ def _csv_safe(value):
     if s[:1] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + s
     return s
+# ====================== NEW VISITOR LOGGING FUNCTIONS ======================
+def get_today_visitor_log_filename():
+    return VISITOR_LOGS_DIR / f"visitor_log_{datetime.date.today().isoformat()}.csv"
 
+def init_visitor_log():
+    log_file = get_today_visitor_log_filename()
+    if not log_file.exists():
+        with open(log_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Timestamp", "Host_Rank", "Host_Name", "Host_EDIPI", "Visitor_Name", "Building", "Room"])
 
+def log_visitor_signin(host_rank, host_name, host_edipi, visitor_name, building, room):
+    init_visitor_log()
+    log_file = get_today_visitor_log_filename()
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(log_file, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([timestamp, host_rank, host_name, host_edipi, visitor_name, building, room])
+# ====================== NEW VISITOR SIGN-IN WINDOW ======================
+class VisitorSignInWindow(tk.Toplevel):
+    def __init__(self, parent, host_data):
+        super().__init__(parent)
+        self.title("Sign In Visitor")
+        self.geometry("600x500")
+        self.host_data = host_data
+
+        tk.Label(self, text="Visitor Sign-In", font=("Arial", 18, "bold")).pack(pady=10)
+
+        tk.Label(self, text="Visitor Full Name:", font=("Arial", 12)).pack(anchor="w", padx=20)
+        self.visitor_name_var = tk.StringVar()
+        tk.Entry(self, textvariable=self.visitor_name_var, font=("Arial", 14), width=40).pack(pady=5, padx=20)
+
+        tk.Label(self, text="Building Number:", font=("Arial", 12)).pack(anchor="w", padx=20)
+        self.building_var = tk.StringVar()
+        tk.Entry(self, textvariable=self.building_var, font=("Arial", 14), width=40).pack(pady=5, padx=20)
+
+        tk.Label(self, text="Room Number:", font=("Arial", 12)).pack(anchor="w", padx=20)
+        self.room_var = tk.StringVar()
+        tk.Entry(self, textvariable=self.room_var, font=("Arial", 14), width=40).pack(pady=5, padx=20)
+
+        tk.Button(self, text="✅ CONFIRM VISITOR SIGN-IN", font=("Arial", 14, "bold"),
+                  bg="#28a745", fg="white", height=2, command=self.confirm).pack(pady=30)
+
+        self.grab_set()
+
+    def confirm(self):
+        visitor_name = self.visitor_name_var.get().strip()
+        building = self.building_var.get().strip()
+        room = self.room_var.get().strip()
+
+        if not all([visitor_name, building, room]):
+            messagebox.showerror("Missing Info", "All fields are required.")
+            return
+
+        log_visitor_signin(
+            self.host_data["rank"],
+            self.host_data["name"],
+            self.host_data["edipi"],
+            visitor_name,
+            building,
+            room
+        )
+
+        messagebox.showinfo("Success", f"Visitor {visitor_name} signed in to {building}-{room}\nby {self.host_data['rank']} {self.host_data['name']}")
+        self.destroy()
 class LibertyKiosk(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -113,7 +179,7 @@ class LibertyKiosk(tk.Tk):
         self.init_files()
         self.profiles = self.load_profiles()
         self.current_user = None
-
+        self.waiting_for_cac = None   # used for visitor flow
         self.build_main_screen()
         self.start_daily_backup_scheduler()
 
@@ -493,7 +559,11 @@ class LibertyKiosk(tk.Tk):
                   font=("Helvetica", 11, "bold"), width=14, height=1,
                   command=self.show_admin_menu).pack(side="right")
         # =======================================================
-
+        # NEW VISITOR BUTTON
+        self.add_visitor_button = tk.Button(self.main_frame, text="SIGN IN VISITOR",
+                                            font=("Arial", 14, "bold"), bg="#17a2b8", fg="white",
+                                            height=2, command=self.start_visitor_signin_flow)
+        self.add_visitor_button.pack(side="left", padx=10, pady=10)
         self.focus_scan_entry()
 
     def focus_scan_entry(self):
@@ -513,7 +583,25 @@ class LibertyKiosk(tk.Tk):
         if barcode.upper() == "ADMIN":
             self.show_admin_menu()
             return
+# ==================== NEW VISITOR SIGN-IN FLOW ====================
+        if self.waiting_for_cac == "visitor_host":
+            try:
+                parsed = self.parse_cac_barcode(barcode)
+                edipi = parsed.get("EDIPI") or barcode
+                rank = parsed.get("Rank", "UNKNOWN")
+                name = parsed.get("Full_Name", "UNKNOWN Marine")
 
+                host_data = {"rank": rank, "name": name, "edipi": edipi}
+
+                if self.verify_pin(edipi):
+                    VisitorSignInWindow(self, host_data)
+                else:
+                    messagebox.showerror("PIN Error", "Incorrect PIN. Visitor sign-in cancelled.")
+            except Exception:
+                messagebox.showerror("Error", "Could not read CAC. Try scanning the front again.")
+            finally:
+                self.waiting_for_cac = None
+            return
         if len(barcode) == 99:
             try:
                 parsed = self.parse_cac_barcode(barcode)
@@ -1156,7 +1244,11 @@ class LibertyKiosk(tk.Tk):
         with open(hash_file, "w", encoding="utf-8") as f:
             f.write(file_hash)
         print(f"✅ BACKUP SUCCESS: {yesterday}")
+    def start_visitor_signin_flow(self):
+        messagebox.showinfo("Host CAC", "Please scan your CAC now...")
+        self.waiting_for_cac = "visitor_host"
 
+    
 if __name__ == "__main__":
     def ignore(sig, frame): pass
     signal.signal(signal.SIGINT, ignore)
