@@ -1,10 +1,7 @@
 import csv
 import datetime
 import hashlib
-import hmac
-import os
 import random
-import re
 import signal
 import shutil
 import subprocess
@@ -15,12 +12,41 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, simpledialog, filedialog, scrolledtext
 
-# USMC COLORS
-USMC_RED = "#C8102E"
-USMC_GOLD = "#FFCC00"
-USMC_DARK = "#001F3F"
-BG_COLOR = "#001F3F"
+# ====================== SHARED UTILITIES ======================
+# All common colors, hashing, CAC parsing, profile loading, liberty status checks,
+# and visitor logging now live in liberty_common.py so the standalone visitor
+# tool and future utilities can reuse the exact same logic.
+from liberty_common import (
+    USMC_RED,
+    USMC_GOLD,
+    USMC_DARK,
+    BG_COLOR,
+    DATA_DIR,
+    PROFILES_FILE,
+    hash_secret,
+    verify_secret,
+    _csv_safe,
+    parse_cac_barcode,
+    load_profiles,
+    find_open_entry,
+    log_visitor_signin,
+    format_phone,
+    find_profile_by_edipi,
+)
 
+from kiosk_config import (
+    ensure_data_directories,
+    get_daily_log_path,
+    get_visitor_log_path,
+    DAILY_LOGS_DIR,
+    VISITOR_LOGS_DIR,
+    BACKUPS_DIR,
+    SUPERUSER_HASH_FILE,
+    AUDIT_FILE,
+    DEFAULT_ADMIN_PASSWORD,
+)
+
+# ====================== MAIN-KIOSK SPECIFIC CONSTANTS ======================
 ZYN_PUNS = [
     "Monica Lewzynsky is NOT authorized for liberty!",
     "Thomas Jefferzyn is NOT authorized for liberty!",
@@ -40,65 +66,12 @@ ZYN_UPC_CODES = {
     "781138807159",
 }
 
-DATA_DIR = Path("liberty_data")
-PROFILES_FILE = DATA_DIR / "profiles.csv"
 ADMIN_HASH_FILE = DATA_DIR / "admin.hash"
 DEFAULT_ADMIN_PASSWORD = "LibertyKiosk2026!"
+
 # ==================== SUPERUSER (BREAK-GLASS) ====================
 SUPERUSER_HASH_FILE = "superuser_hash.txt"
-# Only you know this password. You can change it anytime from the Admin Menu.
-
 AUDIT_FILE = DATA_DIR / "admin_audit.csv"
-
-# ==================== PASSWORD / PIN HASHING ====================
-# PINs and admin/superuser passwords are stored as salted PBKDF2-HMAC-SHA256.
-# Legacy bare SHA-256 hashes (from older versions) are still accepted and are
-# transparently upgraded to the salted format on the next successful login.
-PBKDF2_ITERATIONS = 200_000
-
-
-def hash_secret(secret: str) -> str:
-    """Hash a PIN/password with a per-secret random salt (PBKDF2-HMAC-SHA256)."""
-    salt = os.urandom(16)
-    dk = hashlib.pbkdf2_hmac("sha256", secret.encode("utf-8"), salt, PBKDF2_ITERATIONS)
-    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt.hex()}${dk.hex()}"
-
-
-def verify_secret(secret: str, stored: str):
-    """Verify a secret against a stored hash.
-
-    Returns (is_valid, needs_upgrade). ``needs_upgrade`` is True when the stored
-    value is a legacy unsalted SHA-256 hash that matched, signalling the caller
-    to re-hash and persist it in the modern salted format.
-    """
-    stored = (stored or "").strip()
-    if not stored:
-        return False, False
-    if stored.startswith("pbkdf2_sha256$"):
-        try:
-            _, iters, salt_hex, hash_hex = stored.split("$")
-            dk = hashlib.pbkdf2_hmac("sha256", secret.encode("utf-8"),
-                                     bytes.fromhex(salt_hex), int(iters))
-            return hmac.compare_digest(dk.hex(), hash_hex), False
-        except Exception:
-            return False, False
-    # Legacy: bare 64-char hex SHA-256 (unsalted). Verify, then request upgrade.
-    if len(stored) == 64 and all(c in "0123456789abcdefABCDEF" for c in stored):
-        legacy = hashlib.sha256(secret.encode("utf-8")).hexdigest()
-        return hmac.compare_digest(legacy, stored.lower()), True
-    return False, False
-
-
-def _csv_safe(value):
-    """Neutralize CSV/formula injection for values written to CSV files.
-
-    A leading =, +, -, @, tab or CR makes spreadsheet apps treat the cell as a
-    formula. Prefix such values with a single quote so they render as text.
-    """
-    s = "" if value is None else str(value)
-    if s[:1] in ("=", "+", "-", "@", "\t", "\r"):
-        return "'" + s
-    return s
 
 
 class LibertyKiosk(tk.Tk):
@@ -111,7 +84,7 @@ class LibertyKiosk(tk.Tk):
         self.bind("<Escape>", lambda e: self.show_admin_menu())
 
         self.init_files()
-        self.profiles = self.load_profiles()
+        self.profiles = load_profiles()   # from liberty_common
         self.current_user = None
 
         self.build_main_screen()
@@ -156,19 +129,6 @@ class LibertyKiosk(tk.Tk):
                 ])
         except Exception as e:
             print(f"[AUDIT ERROR] {e}")
-
-    def load_profiles(self):
-        profiles = {}
-        if PROFILES_FILE.exists():
-            with open(PROFILES_FILE, "r", newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    mi = row.get("Middle_Initial", "").strip()
-                    full = f"{row['Last_Name']}, {row['First_Name']}"
-                    if mi: full += f" {mi}"
-                    row["Full_Name"] = full
-                    profiles[row["Raw_ID"]] = row
-        return profiles
 
     def save_profile(self, raw_id, edipi, rank, last, first, mi, phone, pin_hash):
         mi = str(mi or "").strip()
@@ -265,6 +225,15 @@ class LibertyKiosk(tk.Tk):
                                  font=("Helvetica", 13, "bold")).pack(anchor="w")
                         tk.Label(info, text=f"EDIPI: {row['EDIPI']}", fg="#AAAAAA", bg="#001F3F",
                                  font=("Helvetica", 11)).pack(anchor="w")
+
+                        # Look up phone from profiles using the proper EDIPI lookup
+                        phone = "N/A"
+                        prof = find_profile_by_edipi(row.get("EDIPI"))
+                        if prof and prof.get("Phone"):
+                            phone = format_phone(prof["Phone"])   # ensure nice formatting
+                        tk.Label(info, text=f"Phone: {phone}", fg="#AAAAAA", bg="#001F3F",
+                                 font=("Helvetica", 11)).pack(anchor="w")
+
                         tk.Label(info, text=f"Destination: {row.get('Destination', 'N/A')}", fg="white", bg="#001F3F",
                                  font=("Helvetica", 11)).pack(anchor="w")
                         tk.Label(info, text=f"Time Out: {row['Time_out']}", fg="#AAAAAA", bg="#001F3F",
@@ -316,10 +285,11 @@ class LibertyKiosk(tk.Tk):
             tk.Entry(win, textvariable=var, font=("Helvetica", 14), width=40).pack(padx=50, pady=5)
 
         def save():
+            formatted_phone = format_phone(phone_var.get())
             self.save_profile(raw_id, profile["EDIPI"], rank_var.get().strip(), last_var.get().strip(),
-                              first_var.get().strip(), mi_var.get().strip(), phone_var.get().strip(),
+                              first_var.get().strip(), mi_var.get().strip(), formatted_phone,
                               profile["PIN_hash"])
-            self.profiles = self.load_profiles()
+            self.profiles = load_profiles()
             self.themed_showinfo("Success", "Profile updated successfully!")
             win.destroy()
 
@@ -350,7 +320,7 @@ class LibertyKiosk(tk.Tk):
         self.save_profile(raw_id, profile["EDIPI"], profile["Rank"], profile["Last_Name"],
                           profile["First_Name"], profile.get("Middle_Initial",""),
                           profile["Phone"], pin_hash)
-        self.profiles = self.load_profiles()
+        self.profiles = load_profiles()
         self.themed_showinfo("Success", f"PIN for {profile['Full_Name']} has been reset.")
 
     def is_zyn_code(self, barcode):
@@ -467,9 +437,12 @@ class LibertyKiosk(tk.Tk):
         header.pack_propagate(False)
         tk.Label(header, text="UNITED STATES MARINE CORPS", fg=USMC_GOLD, bg=USMC_RED, font=("Helvetica", 28, "bold")).pack(pady=8)
         tk.Label(header, text="MARDET-MONTEREY LIBERTY KIOSK", fg="white", bg=USMC_RED, font=("Helvetica", 36, "bold")).pack()
+
         main = tk.Frame(self, bg=BG_COLOR)
-        main.pack(fill="both", expand=True, padx=40, pady=40)
-        tk.Label(main, text="SCAN THE FRONT OF YOUR CAC", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 48, "bold")).pack(pady=60)
+        main.pack(fill="both", expand=True, padx=40, pady=20)
+        self.main_frame = main
+
+        tk.Label(main, text="SCAN THE FRONT OF YOUR CAC", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 48, "bold")).pack(pady=40)
         tk.Label(main, text="Hold the FRONT of your CAC in front of the scanner", fg="white", bg=BG_COLOR, font=("Helvetica", 24)).pack()
         self.scan_entry = tk.Entry(main, font=("Helvetica", 12), width=80, justify="center")
         self.scan_entry.pack(pady=30)
@@ -477,25 +450,32 @@ class LibertyKiosk(tk.Tk):
         self.status_label = tk.Label(main, text="", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 18, "bold"), wraplength=1100)
         self.status_label.pack(pady=40)
 
-        # ==================== UPDATED FOOTER ====================
+        # ==================== FOOTER ====================
         footer = tk.Frame(self, bg=BG_COLOR)
         footer.pack(side="bottom", fill="x", pady=20, padx=30)
 
         tk.Label(footer, text="Scanner ready - FRONT of CAC only", fg="#666666", bg=BG_COLOR, font=("Helvetica", 12)).pack(side="left")
 
-        # New button - moved to main screen
+        # Left side - Visitor related buttons (gold to match other buttons)
+        tk.Button(footer, text="VIEW VISITOR LIST", bg=USMC_GOLD, fg=USMC_DARK,
+                  font=("Helvetica", 11, "bold"), width=18, height=1,
+                  command=self.view_visitor_list).pack(side="left", padx=10)
+
+        tk.Button(footer, text="CHECK IN/OUT VISITOR", bg=USMC_GOLD, fg=USMC_DARK,
+                  font=("Helvetica", 11, "bold"), width=20, height=1,
+                  command=self.launch_visitor_signin).pack(side="left")
+
+        # Right side
         tk.Button(footer, text="VIEW MARINES OUT", bg=USMC_GOLD, fg=USMC_DARK,
                   font=("Helvetica", 11, "bold"), width=18, height=1,
                   command=self.admin_view_out).pack(side="right", padx=(0, 10))
 
-        # Admin button stays right next to it
         tk.Button(footer, text="ADMIN MENU", bg=USMC_GOLD, fg=USMC_DARK,
                   font=("Helvetica", 11, "bold"), width=14, height=1,
                   command=self.show_admin_menu).pack(side="right")
-        # =======================================================
 
         self.focus_scan_entry()
-
+    
     def focus_scan_entry(self):
         self.scan_entry.focus_set()
         self.scan_entry.delete(0, tk.END)
@@ -513,10 +493,9 @@ class LibertyKiosk(tk.Tk):
         if barcode.upper() == "ADMIN":
             self.show_admin_menu()
             return
-
         if len(barcode) == 99:
             try:
-                parsed = self.parse_cac_barcode(barcode)
+                parsed = parse_cac_barcode(barcode)
             except Exception:
                 self.show_message("❌ Parse error. Try scanning the front again.", USMC_RED)
                 return
@@ -533,38 +512,6 @@ class LibertyKiosk(tk.Tk):
             return
         else:
             self.show_message("❌ Please scan the FRONT of your CAC only", USMC_RED)
-
-    def parse_cac_barcode(self, barcode):
-        rank = "UNKNOWN"
-        first = "UNKNOWN"
-        last = "UNKNOWN"
-        mi = ""
-
-        rank_words = ["SGT", "CPL", "LCPL", "PFC", "PVT", "SSGT", "GYSGT", "MSGT", "MGYSGT", "SGTMAJ"]
-        for word in rank_words:
-            if word in barcode:
-                rank = word
-                break
-
-        name_match = re.search(r'([A-Z][a-z]+)\s+([A-Z])([A-Z][a-z]+)', barcode)
-        if name_match:
-            first = name_match.group(1)
-            mi = name_match.group(2)
-            last = name_match.group(3)
-
-        full_name = f"{last}, {first}"
-        if mi:
-            full_name += f" {mi}"
-
-        return {
-            "Raw_ID": barcode,
-            "EDIPI": barcode,
-            "Rank": rank,
-            "Last_Name": last,
-            "First_Name": first,
-            "Middle_Initial": mi,
-            "Full_Name": full_name
-        }
 
     def show_registration_screen(self, parsed):
         reg_win = tk.Toplevel(self)
@@ -613,11 +560,12 @@ class LibertyKiosk(tk.Tk):
                     return
 
                 pin_hash = hash_secret(pin)
+                formatted_phone = format_phone(phone_var.get())
                 self.save_profile(parsed["Raw_ID"], edipi, parsed["Rank"], last_var.get().strip(),
                                   first_var.get().strip(), mi_var.get().strip(),
-                                  phone_var.get().strip(), pin_hash)
+                                  formatted_phone, pin_hash)
 
-                self.profiles = self.load_profiles()
+                self.profiles = load_profiles()
                 self.current_user["EDIPI"] = edipi
                 self.current_user["Raw_ID"] = parsed["Raw_ID"]
 
@@ -638,7 +586,7 @@ class LibertyKiosk(tk.Tk):
             return
 
         edipi = profile["EDIPI"]
-        open_entry, log_file = self.find_open_entry(edipi)
+        open_entry, log_file = find_open_entry(edipi)
 
         full_name = profile.get("Full_Name") or f"{profile.get('Last_Name', '')}, {profile.get('First_Name', '')}"
 
@@ -668,7 +616,7 @@ class LibertyKiosk(tk.Tk):
                     self.themed_showerror("Invalid Scan", "❌ Please scan the FRONT of a valid CAC only.")
                     continue
                 try:
-                    b_parsed = self.parse_cac_barcode(buddy)
+                    b_parsed = parse_cac_barcode(buddy)
                     b_raw_id = b_parsed["Raw_ID"]
                     if b_raw_id == raw_id:
                         self.themed_showerror("Duplicate", "You cannot add yourself as a buddy.")
@@ -710,7 +658,7 @@ class LibertyKiosk(tk.Tk):
                                   profile["Last_Name"], profile["First_Name"],
                                   profile.get("Middle_Initial", ""), profile["Phone"],
                                   hash_secret(pin))
-                self.profiles = self.load_profiles()
+                self.profiles = load_profiles()
             except Exception as e:
                 print(f"[PIN UPGRADE ERROR] {e}")
         return valid
@@ -810,22 +758,62 @@ class LibertyKiosk(tk.Tk):
     def show_admin_menu(self):
         if not self.verify_admin_password():
             return
+
         admin_win = tk.Toplevel(self)
         admin_win.title("ADMIN MENU")
         admin_win.configure(bg=BG_COLOR)
-        admin_win.geometry("900x700")
+        admin_win.geometry("900x750")
         admin_win.grab_set()
         admin_win.lift()
         admin_win.focus_force()
-        tk.Label(admin_win, text="🔐 ADMIN MENU", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 28, "bold")).pack(pady=20)
+
+        # ====================== SCROLLABLE ADMIN MENU ======================
+        canvas = tk.Canvas(admin_win, bg=BG_COLOR, highlightthickness=0)
+        scrollbar = tk.Scrollbar(admin_win, orient="vertical", command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg=BG_COLOR)
+
+        scroll_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Mouse wheel support (consistent with other scrollable views)
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def on_linux_scroll(event):
+            if event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
+        canvas.bind_all("<Button-4>", on_linux_scroll)
+        canvas.bind_all("<Button-5>", on_linux_scroll)
+
+        def cleanup_bindings():
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        admin_win.protocol("WM_DELETE_WINDOW", lambda: (cleanup_bindings(), admin_win.destroy()))
+
+        # ====================== CONTENT ======================
+        tk.Label(scroll_frame, text="🔐 ADMIN MENU", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 28, "bold")).pack(pady=20)
 
         # Superuser-only buttons (only you see these)
         if getattr(self, 'is_superuser', False):
-            tk.Button(admin_win, text="🔥 RESET ADMIN PASSWORD",
+            tk.Button(scroll_frame, text="🔥 RESET ADMIN PASSWORD",
                       bg="#8B0000", fg="white",
                       font=("Helvetica", 16, "bold"), width=40, height=2,
                       command=lambda: (admin_win.destroy(), self.superuser_reset_admin_password())).pack(pady=8)
-            tk.Button(admin_win, text="🔥 CHANGE SUPERUSER PASSWORD",
+            tk.Button(scroll_frame, text="🔥 CHANGE SUPERUSER PASSWORD",
                       bg="#8B0000", fg="white",
                       font=("Helvetica", 16, "bold"), width=40, height=2,
                       command=lambda: (admin_win.destroy(), self.superuser_change_superuser_password())).pack(pady=8)
@@ -833,27 +821,27 @@ class LibertyKiosk(tk.Tk):
             # Break-glass bootstrap: if no superuser password is set yet (e.g. the
             # exposed hash was removed and rotated), let an authenticated admin
             # establish one. The button disappears once the file exists.
-            tk.Button(admin_win, text="⚙️ SET SUPERUSER PASSWORD (first-time setup)",
+            tk.Button(scroll_frame, text="⚙️ SET SUPERUSER PASSWORD (first-time setup)",
                       bg="#8B0000", fg="white",
                       font=("Helvetica", 16, "bold"), width=40, height=2,
                       command=lambda: (admin_win.destroy(), self.superuser_change_superuser_password())).pack(pady=8)
 
-        # Regular admin options + new Force Check-In
+        # Regular admin options
         buttons = [
             ("1. Update Marine Profile", self.admin_update_profile),
             ("2. Reset Marine PIN", self.admin_reset_pin),
             ("3. Force Check-In Marine", self.force_check_in_from_admin),
             ("4. Change Admin Password", self.admin_change_password),
             ("5. Verify Backups (Integrity Check)", self.launch_backup_verifier),
-            ("6. Export Logs & Backups to USB", self.admin_export_to_usb),
+            ("6. Export All Logs & Backups to USB", self.admin_export_to_usb),
             ("7. Exit Kiosk", self.admin_shutdown)
         ]
         for text, cmd in buttons:
-            tk.Button(admin_win, text=text, bg=USMC_GOLD, fg=USMC_DARK,
+            tk.Button(scroll_frame, text=text, bg=USMC_GOLD, fg=USMC_DARK,
                       font=("Helvetica", 16, "bold"), width=40, height=2,
                       command=lambda c=cmd: (admin_win.destroy(), c())).pack(pady=8)
 
-        tk.Button(admin_win, text="Return to Kiosk", bg="#666666", fg="white",
+        tk.Button(scroll_frame, text="Return to Kiosk", bg="#666666", fg="white",
                   font=("Helvetica", 14), command=admin_win.destroy).pack(pady=30)
     
     def superuser_reset_admin_password(self):
@@ -1100,6 +1088,14 @@ class LibertyKiosk(tk.Tk):
             if backups_src.exists():
                 shutil.copytree(backups_src, export_folder / "backups", dirs_exist_ok=True)
 
+            # Export visitor logs as part of the unified export
+            visitor_src = VISITOR_LOGS_DIR
+            if visitor_src.exists():
+                visitor_dest = export_folder / "visitor_logs"
+                visitor_dest.mkdir(exist_ok=True)
+                for vlog in visitor_src.glob("visitor_log_*.csv"):
+                    shutil.copy2(vlog, visitor_dest / vlog.name)
+
             for file in [PROFILES_FILE, ADMIN_HASH_FILE]:
                 if file.exists():
                     shutil.copy2(file, export_folder / file.name)
@@ -1107,12 +1103,13 @@ class LibertyKiosk(tk.Tk):
             range_text = "ALL logs" if export_all else f"{start_date} to {end_date}"
             self.themed_showinfo("✅ Export Successful",
                 f"Export completed!\n\n"
-                f"Logs exported: {exported_logs} files ({range_text})\n"
+                f"Liberty logs exported: {exported_logs} files ({range_text})\n"
+                f"Visitor logs included\n"
                 f"Folder created: {export_folder}\n\n"
                 "You may now safely remove the USB drive.")
 
             self.log_admin_action(
-                "EXPORT", f"{exported_logs} logs ({range_text}) -> {export_folder}",
+                "EXPORT", f"{exported_logs} liberty logs + visitor logs ({range_text}) -> {export_folder}",
                 actor=("superuser" if getattr(self, 'is_superuser', False) else "admin"))
         except Exception as e:
             self.themed_showerror("Export Error", f"Could not export files:\n{str(e)}")
@@ -1156,6 +1153,168 @@ class LibertyKiosk(tk.Tk):
         with open(hash_file, "w", encoding="utf-8") as f:
             f.write(file_hash)
         print(f"✅ BACKUP SUCCESS: {yesterday}")
+
+    def launch_visitor_signin(self):
+        """Launch the standalone Visitor Sign-In tool (like backup_verifier).
+        The confirmation dialog will automatically close when the visitor tool is closed."""
+        try:
+            proc = subprocess.Popen([sys.executable, "visitor_signin.py"])
+
+            # Create a custom dialog we can track and auto-close later
+            dlg = self._create_themed_toplevel("Visitor Sign-In")
+            tk.Label(dlg, text="✅ Visitor Sign-In tool opened in a new window.",
+                     fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 16, "bold"),
+                     wraplength=620).pack(pady=40)
+            tk.Button(dlg, text="OK", bg=USMC_GOLD, fg=USMC_DARK,
+                      font=("Helvetica", 14, "bold"), width=15, height=2,
+                      command=dlg.destroy).pack(pady=20)
+
+            # Store references so the poller can close the dialog
+            self._visitor_launch_dialog = dlg
+            self._visitor_process = proc
+
+            # Start polling to auto-close the dialog when the visitor tool exits
+            self.after(900, self._poll_visitor_process)
+
+        except Exception as e:
+            self.themed_showerror("Error", f"Could not launch visitor sign-in tool:\n{e}")
+
+    def _poll_visitor_process(self):
+        """Check if the launched visitor_signin.py process has exited.
+        If so, automatically close the 'launched in new window' dialog."""
+        if not hasattr(self, '_visitor_process') or self._visitor_process is None:
+            return
+
+        # poll() returns None if still running, exit code otherwise
+        if self._visitor_process.poll() is not None:
+            # Process has ended
+            if hasattr(self, '_visitor_launch_dialog') and self._visitor_launch_dialog is not None:
+                try:
+                    self._visitor_launch_dialog.destroy()
+                except Exception:
+                    pass  # Dialog may have already been closed by user
+
+            self._visitor_process = None
+            self._visitor_launch_dialog = None
+        else:
+            # Still running — check again shortly
+            self.after(900, self._poll_visitor_process)
+
+    def view_visitor_list(self):
+        """Show today's visitor sign-ins in a style matching 'View Marines Out'.
+        Highlights visitors who have not yet checked out."""
+        win = tk.Toplevel(self)
+        win.title("Visitors Today")
+        win.configure(bg=BG_COLOR)
+        win.geometry("1050x680")
+
+        tk.Label(win, text="VISITORS TODAY", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 22, "bold")).pack(pady=10)
+
+        # Scrollable container (same pattern as admin_view_out)
+        canvas = tk.Canvas(win, bg=BG_COLOR, highlightthickness=0)
+        scrollbar = tk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg=BG_COLOR)
+
+        scroll_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True, padx=20, pady=10)
+        scrollbar.pack(side="right", fill="y")
+
+        # Mouse wheel support
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def on_linux_scroll(event):
+            if event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
+        canvas.bind_all("<Button-4>", on_linux_scroll)
+        canvas.bind_all("<Button-5>", on_linux_scroll)
+
+        # Load only today's visitor log
+        today = datetime.date.today().isoformat()
+        log_file = DATA_DIR / "visitor logs" / f"visitor_log_{today}.csv"
+
+        visitor_count = 0
+        open_count = 0
+
+        if not log_file.exists():
+            tk.Label(scroll_frame, text="No visitors have signed in today.", fg=USMC_GOLD, bg=BG_COLOR,
+                     font=("Helvetica", 16)).pack(pady=60)
+        else:
+            try:
+                with open(log_file, "r", newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    rows = list(reader)
+
+                for row in rows:
+                    visitor_count += 1
+                    is_open = not str(row.get("Time_Out", "")).strip()
+
+                    if is_open:
+                        open_count += 1
+                        bg_color = "#003300"          # Dark green for still signed in
+                        status_color = "#00FF00"
+                        status_text = "STILL SIGNED IN"
+                    else:
+                        bg_color = "#001F3F"          # Normal dark blue
+                        status_color = "#AAAAAA"
+                        status_text = f"Checked Out: {row.get('Time_Out', '')[:16]}"
+
+                    row_frame = tk.Frame(scroll_frame, bg=bg_color, relief="ridge", bd=2)
+                    row_frame.pack(fill="x", pady=6, padx=10)
+
+                    info = tk.Frame(row_frame, bg=bg_color)
+                    info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
+
+                    # Header
+                    header_text = f"VISITOR #{visitor_count}"
+                    if is_open:
+                        header_text += "   ● " + status_text
+                    tk.Label(info, text=header_text, fg=status_color if is_open else USMC_GOLD, bg=bg_color,
+                             font=("Helvetica", 11, "bold")).pack(anchor="w")
+
+                    # Main line: Host → Visitor
+                    main_line = f"{row.get('Host_Rank','')} {row.get('Host_Name','')}  →  {row.get('Visitor_Name','')}"
+                    tk.Label(info, text=main_line, fg="white", bg=bg_color,
+                             font=("Helvetica", 14, "bold")).pack(anchor="w")
+
+                    # Details
+                    tk.Label(info, text=f"Location: {row.get('Building','')} - {row.get('Room','')}",
+                             fg="#CCCCCC", bg=bg_color, font=("Helvetica", 11)).pack(anchor="w")
+
+                    tk.Label(info, text=f"Signed In: {row.get('Timestamp','')[:19]}",
+                             fg="#AAAAAA", bg=bg_color, font=("Helvetica", 11)).pack(anchor="w")
+
+                    if not is_open:
+                        tk.Label(info, text=status_text, fg="#AAAAAA", bg=bg_color,
+                                 font=("Helvetica", 11)).pack(anchor="w")
+                    else:
+                        tk.Label(info, text=status_text, fg="#00FF00", bg=bg_color,
+                                 font=("Helvetica", 12, "bold")).pack(anchor="w")
+
+            except Exception as e:
+                tk.Label(scroll_frame, text=f"Error reading visitor log: {e}", fg=USMC_RED, bg=BG_COLOR,
+                         font=("Helvetica", 14)).pack(pady=40)
+
+        # Summary at bottom
+        if visitor_count > 0:
+            summary = f"Total today: {visitor_count}   |   Still signed in: {open_count}"
+            tk.Label(scroll_frame, text=summary, fg=USMC_GOLD, bg=BG_COLOR,
+                     font=("Helvetica", 13, "bold")).pack(pady=15)
+
+        tk.Button(win, text="Close", bg=USMC_GOLD, fg=USMC_DARK,
+                  font=("Helvetica", 14, "bold"), width=14, height=1,
+                  command=win.destroy).pack(pady=15)
 
 if __name__ == "__main__":
     def ignore(sig, frame): pass
