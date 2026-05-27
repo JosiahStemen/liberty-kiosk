@@ -1577,10 +1577,16 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
 
     def _create_export_manifest(self, export_folder: Path) -> str:
         """
-        Walk the entire export folder and create:
-          - MANIFEST.json  (every file with relative path, size, sha256)
-          - MANIFEST.sha256 (hash of the MANIFEST.json for quick integrity check)
-        Returns the SHA256 of the manifest itself.
+        Create a cryptographic manifest for the export package.
+
+        - MANIFEST.json lists every file in the package (except itself and MANIFEST.sha256)
+          along with its size and SHA-256 hash.
+        - MANIFEST.sha256 contains the SHA-256 of the final MANIFEST.json.
+
+        This allows a simple top-level integrity check:
+            sha256(MANIFEST.json) == contents of MANIFEST.sha256
+
+        Returns the SHA-256 of the final MANIFEST.json.
         """
         manifest_path = export_folder / "MANIFEST.json"
         manifest_hash_path = export_folder / "MANIFEST.sha256"
@@ -1590,7 +1596,8 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         for file_path in sorted(export_folder.rglob("*")):
             if not file_path.is_file():
                 continue
-            # Skip the manifest files themselves while building (we'll add them at the end)
+
+            # Exclude the two manifest files themselves from the list
             if file_path.name in ("MANIFEST.json", "MANIFEST.sha256"):
                 continue
 
@@ -1618,34 +1625,17 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
             "files": files_list
         }
 
-        # Write the manifest
+        # Write the final manifest
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest_data, f, indent=2)
 
-        # Compute hash of the manifest we just wrote
+        # Compute hash of the manifest we just wrote (this is the authoritative value)
         with open(manifest_path, "rb") as f:
             manifest_hash = hashlib.sha256(f.read()).hexdigest()
 
+        # Write the hash to the sidecar file
         with open(manifest_hash_path, "w", encoding="utf-8") as f:
             f.write(manifest_hash)
-
-        # Re-add the two manifest files into the JSON so it is complete
-        files_list.append({
-            "path": "MANIFEST.json",
-            "size_bytes": manifest_path.stat().st_size,
-            "sha256": manifest_hash
-        })
-        files_list.append({
-            "path": "MANIFEST.sha256",
-            "size_bytes": manifest_hash_path.stat().st_size,
-            "sha256": hashlib.sha256(manifest_hash.encode()).hexdigest()
-        })
-
-        # Rewrite the manifest with the complete list
-        manifest_data["file_count"] = len(files_list)
-        manifest_data["files"] = files_list
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            json.dump(manifest_data, f, indent=2)
 
         return manifest_hash
 
