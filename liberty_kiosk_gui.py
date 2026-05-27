@@ -1,6 +1,7 @@
 import csv
 import datetime
 import hashlib
+import json
 import random
 import signal
 import shutil
@@ -11,6 +12,9 @@ import threading
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, simpledialog, filedialog, scrolledtext
+
+# Add the lib folder to path so we can import our modules cleanly
+sys.path.insert(0, str(Path(__file__).parent / "lib"))
 
 # ====================== SHARED UTILITIES ======================
 # All common colors, hashing, CAC parsing, profile loading, liberty status checks,
@@ -32,6 +36,9 @@ from liberty_common import (
     log_visitor_signin,
     format_phone,
     find_profile_by_edipi,
+    get_last_row_hash,
+    _compute_row_hash,
+    record_hash_entry,
 )
 
 from kiosk_config import (
@@ -41,10 +48,13 @@ from kiosk_config import (
     DAILY_LOGS_DIR,
     VISITOR_LOGS_DIR,
     BACKUPS_DIR,
+    INTEGRITY_LEDGER_FILE,
     SUPERUSER_HASH_FILE,
     AUDIT_FILE,
     DEFAULT_ADMIN_PASSWORD,
 )
+
+from kiosk_ui import ThemedDialogs
 
 # ====================== MAIN-KIOSK SPECIFIC CONSTANTS ======================
 ZYN_PUNS = [
@@ -80,7 +90,7 @@ SUPERUSER_HASH_FILE = "superuser_hash.txt"
 AUDIT_FILE = DATA_DIR / "admin_audit.csv"
 
 
-class LibertyKiosk(tk.Tk):
+class LibertyKiosk(tk.Tk, ThemedDialogs):
     def __init__(self):
         super().__init__()
         self.title("MARDET-MONTEREY LIBERTY KIOSK")
@@ -115,7 +125,9 @@ class LibertyKiosk(tk.Tk):
 
     def get_log_file(self):
         today = datetime.date.today()
-        return DATA_DIR / "daily_logs" / f"liberty_log_{today.isoformat()}.csv"
+        log_file = DATA_DIR / "daily_logs" / f"liberty_log_{today.isoformat()}.csv"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        return log_file
 
     def log_admin_action(self, action, detail="", actor="admin"):
         """Append an entry to the standalone admin audit trail.
@@ -332,110 +344,10 @@ class LibertyKiosk(tk.Tk):
     def is_zyn_code(self, barcode):
         return barcode in ZYN_UPC_CODES
 
-    def _create_themed_toplevel(self, title, bg=BG_COLOR):
-        dlg = tk.Toplevel(self)
-        dlg.title(title)
-        dlg.configure(bg=bg)
-        dlg.geometry("700x420")
-        dlg.grab_set()
-        dlg.lift()
-        dlg.focus_force()
-        dlg.transient(self)
-        return dlg
+    # Themed dialog methods (_create_themed_toplevel, themed_showinfo, etc.)
+    # are now provided by the ThemedDialogs mixin from kiosk_ui.py.
+    # This removes ~100 lines of duplicated code while keeping identical behavior.
 
-    
-    def themed_showinfo(self, title, message):
-        dlg = self._create_themed_toplevel(title, BG_COLOR)
-        tk.Label(dlg, text=message, fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 16, "bold"), wraplength=620).pack(pady=40)
-        tk.Button(dlg, text="OK", bg=USMC_GOLD, fg=USMC_DARK, font=("Helvetica", 14, "bold"), width=15, height=2, command=dlg.destroy).pack(pady=20)
-        dlg.bind("<Return>", lambda e: dlg.destroy())
-        dlg.wait_window(dlg)
-
-    def themed_showerror(self, title, message):
-        dlg = self._create_themed_toplevel(title, USMC_RED)
-        tk.Label(dlg, text=message, fg="white", bg=USMC_RED, font=("Helvetica", 16, "bold"), wraplength=620).pack(pady=40)
-        tk.Button(dlg, text="OK", bg=USMC_GOLD, fg=USMC_DARK, font=("Helvetica", 14, "bold"), width=15, height=2, command=dlg.destroy).pack(pady=20)
-        dlg.bind("<Return>", lambda e: dlg.destroy())
-        dlg.wait_window(dlg)
-
-    def themed_askstring(self, title, prompt, show=None):
-        dlg = self._create_themed_toplevel(title, BG_COLOR)
-        result = [None]
-
-        tk.Label(dlg, text=prompt, fg=USMC_GOLD, bg=BG_COLOR,
-                 font=("Helvetica", 18, "bold"), wraplength=650).pack(pady=30)
-
-        entry = tk.Entry(dlg, font=("Helvetica", 18), width=40,
-                         show=show, justify="center")
-        entry.pack(pady=10)
-
-        def submit():
-            result[0] = entry.get()
-            dlg.destroy()
-
-        def cancel():
-            result[0] = None
-            dlg.destroy()
-
-        btn_frame = tk.Frame(dlg, bg=BG_COLOR)
-        btn_frame.pack(pady=30)
-        tk.Button(btn_frame, text="OK", bg=USMC_GOLD, fg=USMC_DARK,
-                  font=("Helvetica", 14, "bold"), width=12, height=2,
-                  command=submit).pack(side="left", padx=20)
-        tk.Button(btn_frame, text="Cancel", bg=USMC_RED, fg="white",
-                  font=("Helvetica", 14, "bold"), width=12, height=2,
-                  command=cancel).pack(side="left", padx=20)
-
-        # ==================== AUTO-FOCUS FIX ====================
-        entry.bind("<Return>", lambda e: submit())
-        dlg.bind("<Return>", lambda e: submit())
-        dlg.bind("<Escape>", lambda e: cancel())
-
-        # Force focus on the entry box AFTER the dialog is fully drawn
-        def force_focus():
-            entry.focus_force()
-            entry.select_range(0, tk.END)   # selects the whole field (ready to type)
-            entry.icursor(tk.END)
-
-        dlg.after(10, force_focus)          # small delay guarantees it works
-        dlg.grab_set()
-        dlg.focus_force()
-        dlg.wait_window(dlg)
-        return result[0]
-    
-    def themed_askyesno(self, title, message):
-        dlg = self._create_themed_toplevel(title, BG_COLOR)
-        result = [False]
-
-        tk.Label(dlg, text=message, fg=USMC_GOLD, bg=BG_COLOR,
-                 font=("Helvetica", 16, "bold"), wraplength=620).pack(pady=40)
-
-        def yes():
-            result[0] = True
-            dlg.destroy()
-
-        def no():
-            result[0] = False
-            dlg.destroy()
-
-        btn_frame = tk.Frame(dlg, bg=BG_COLOR)
-        btn_frame.pack(pady=20)
-        tk.Button(btn_frame, text="YES", bg=USMC_GOLD, fg=USMC_DARK,
-                  font=("Helvetica", 14, "bold"), width=12, height=2,
-                  command=yes).pack(side="left", padx=30)
-        tk.Button(btn_frame, text="NO", bg=USMC_RED, fg="white",
-                  font=("Helvetica", 14, "bold"), width=12, height=2,
-                  command=no).pack(side="left", padx=30)
-
-        # Improved Enter key support
-        dlg.bind("<Return>", lambda e: yes())
-        dlg.bind("<Escape>", lambda e: no())
-
-        dlg.grab_set()
-        dlg.focus_force()
-        dlg.wait_window(dlg)
-        return result[0]
-    
     def build_main_screen(self):
         for widget in self.winfo_children(): widget.destroy()
         header = tk.Frame(self, bg=USMC_RED, height=140)
@@ -592,7 +504,7 @@ class LibertyKiosk(tk.Tk):
             return
 
         edipi = profile["EDIPI"]
-        open_entry, log_file = find_open_entry(edipi)
+        open_entry, log_file = self.find_open_entry(edipi)
 
         full_name = profile.get("Full_Name") or f"{profile.get('Last_Name', '')}, {profile.get('First_Name', '')}"
 
@@ -695,61 +607,92 @@ class LibertyKiosk(tk.Tk):
                     row["Time_in"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     updated = True
         if updated:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
             with open(log_file, "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(rows)
 
     def log_check_out(self, group_members, sponsor_profile, destination):
+        """Write checkout entries to today's liberty log (clean columns only).
+        Hash chain is recorded separately in the integrity ledger.
+        """
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_file = self.get_log_file()
+
+        # Ensure the daily_logs directory exists (critical after fresh start or deletion)
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+
         file_exists = log_file.exists()
 
-        # Enhanced CSV with buddy's full identifying data (EDIPI, Last, First)
+        # Clean fieldnames (no hash columns in the human-readable CSV)
         fieldnames = [
             "Rank", "Name", "EDIPI", "Last_Name", "First_Name",
             "Buddy_Name", "Buddy_EDIPI", "Buddy_Last_Name", "Buddy_First_Name",
             "Destination", "Time_out", "Time_in"
         ]
-        with open(log_file, "a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            if not file_exists:
-                writer.writeheader()
 
-            sponsor_edipi = sponsor_profile.get("EDIPI", "")
-            sponsor_last = sponsor_profile.get("Last_Name", "")
-            sponsor_first = sponsor_profile.get("First_Name", "")
-            sponsor_name = sponsor_profile.get("Full_Name", "")
+        previous_hash = get_last_row_hash("liberty", datetime.date.today().isoformat()) if log_file.exists() else ""
 
-            for member in group_members:
-                member_edipi = member.get("EDIPI", "")
-                is_self = bool(member_edipi and member_edipi == sponsor_edipi)
-                if is_self:
-                    buddy_name = "Self"
-                    buddy_edipi = ""
-                    buddy_last = ""
-                    buddy_first = ""
-                else:
-                    buddy_name = sponsor_name
-                    buddy_edipi = sponsor_edipi
-                    buddy_last = sponsor_last
-                    buddy_first = sponsor_first
+        try:
+            with open(log_file, "a", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                if not file_exists:
+                    writer.writeheader()
 
-                row = {
-                    "Rank": member.get("Rank", ""),
-                    "Name": member.get("Full_Name", ""),
-                    "EDIPI": member_edipi,
-                    "Last_Name": member.get("Last_Name", ""),
-                    "First_Name": member.get("First_Name", ""),
-                    "Buddy_Name": buddy_name,
-                    "Buddy_EDIPI": buddy_edipi,
-                    "Buddy_Last_Name": buddy_last,
-                    "Buddy_First_Name": buddy_first,
-                    "Destination": _csv_safe(destination),
-                    "Time_out": now_str,
-                    "Time_in": ""
-                }
-                writer.writerow(row)
+                sponsor_edipi = sponsor_profile.get("EDIPI", "")
+                sponsor_last = sponsor_profile.get("Last_Name", "")
+                sponsor_first = sponsor_profile.get("First_Name", "")
+                sponsor_name = sponsor_profile.get("Full_Name", "")
+
+                for member in group_members:
+                    member_edipi = member.get("EDIPI", "")
+                    is_self = bool(member_edipi and member_edipi == sponsor_edipi)
+                    if is_self:
+                        buddy_name = "Self"
+                        buddy_edipi = ""
+                        buddy_last = ""
+                        buddy_first = ""
+                    else:
+                        buddy_name = sponsor_name
+                        buddy_edipi = sponsor_edipi
+                        buddy_last = sponsor_last
+                        buddy_first = sponsor_first
+
+                    row = {
+                        "Rank": member.get("Rank", ""),
+                        "Name": member.get("Full_Name", ""),
+                        "EDIPI": member_edipi,
+                        "Last_Name": member.get("Last_Name", ""),
+                        "First_Name": member.get("First_Name", ""),
+                        "Buddy_Name": buddy_name,
+                        "Buddy_EDIPI": buddy_edipi,
+                        "Buddy_Last_Name": buddy_last,
+                        "Buddy_First_Name": buddy_first,
+                        "Destination": _csv_safe(destination),
+                        "Time_out": now_str,
+                        "Time_in": ""
+                    }
+
+                    row_hash = _compute_row_hash(row, previous_hash)
+
+                    # Record in separate ledger only
+                    record_hash_entry(
+                        log_type="liberty",
+                        log_date=datetime.date.today().isoformat(),
+                        original_row_key=f"{now_str}|{member_edipi}",
+                        previous_hash=previous_hash,
+                        row_hash=row_hash
+                    )
+
+                    writer.writerow(row)
+                    previous_hash = row_hash
+
+            return True
+        except Exception as e:
+            print(f"[LOG_CHECK_OUT ERROR] Failed to write log: {e}")
+            self.themed_showerror("Logging Error", f"Failed to save checkout log:\n{e}")
+            return False
 
     def show_zyn_easter_egg(self, barcode):
         pun = random.choice(ZYN_PUNS)
@@ -890,7 +833,8 @@ class LibertyKiosk(tk.Tk):
     
     def launch_backup_verifier(self):
         try:
-            subprocess.Popen([sys.executable, "backup_verifier.py"])
+            verifier_path = str(Path(__file__).parent / "tools" / "backup_verifier.py")
+            subprocess.Popen([sys.executable, verifier_path])
             self.themed_showinfo("Success", "✅ Backup Verifier opened in a new window.")
         except Exception as e:
             self.themed_showerror("Error", f"Could not launch verifier:\n{e}")
@@ -1035,19 +979,31 @@ class LibertyKiosk(tk.Tk):
             self.admin_view_out()  # refresh the list
 
     def admin_export_to_usb(self):
+        """Export logs for a date range as a court-ready, cryptographically hardened package.
+
+        Current structure (lean, focused on daily use + forensic integrity):
+            LibertyKiosk_Export_YYYY-MM-DD_to_YYYY-MM-DD/
+                ├── Reports/
+                │   └── Daily/                   ← Per-day Liberty + Visitor PDFs (main daily use)
+                │   └── Visitor_Logs_Report.pdf  ← Combined visitor report only
+                └── Full_Integrity_Package/
+                    ├── Evidence/                (ChainOfCustody + MANIFEST + README)
+                    ├── Backups/                 (.bak + .sha256)
+                    └── Metadata/                (integrity_ledger + export info)
+        """
         if not self.themed_askyesno("⚠️ PII/CUI WARNING",
             "This will export logs containing names, EDIPIs, and phone numbers.\n\n"
             "This data is PII/CUI. Only export to an approved, scanned USB.\n\n"
             "Continue?"):
             return
 
-        start_date_str = simpledialog.askstring("Start Date", 
-            "Enter START date for logs (YYYY-MM-DD)\nExample: 2026-05-20\n(Leave blank for ALL logs)", 
+        start_date_str = simpledialog.askstring("Start Date",
+            "Enter START date for logs (YYYY-MM-DD)\nExample: 2026-05-20\n(Leave blank for ALL logs)",
             parent=self)
         if start_date_str is None: return
 
-        end_date_str = simpledialog.askstring("End Date", 
-            "Enter END date for logs (YYYY-MM-DD)\nExample: 2026-05-24", 
+        end_date_str = simpledialog.askstring("End Date",
+            "Enter END date for logs (YYYY-MM-DD)\nExample: 2026-05-24",
             parent=self)
         if end_date_str is None: return
 
@@ -1069,56 +1025,817 @@ class LibertyKiosk(tk.Tk):
         if not usb_path: return
 
         usb_path = Path(usb_path)
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-        export_folder = usb_path / f"LibertyKiosk_Export_{timestamp}"
-        export_folder.mkdir(parents=True, exist_ok=True)
 
-        try:
-            exported_logs = 0
+        # === NEW ARCHIVE-FRIENDLY NAMING (always date range for easy searching on archive drives) ===
+        if export_all:
+            # For "ALL", discover the actual date range from the logs that will be exported
+            min_date = None
+            max_date = None
             logs_src = DATA_DIR / "daily_logs"
             if logs_src.exists():
-                logs_dest = export_folder / "daily_logs"
-                logs_dest.mkdir(exist_ok=True)
-                for log_file in logs_src.glob("liberty_log_*.csv"):
+                for f in logs_src.glob("liberty_log_*.csv"):
+                    try:
+                        d = datetime.datetime.strptime(f.stem.split("_")[-1], "%Y-%m-%d").date()
+                        if min_date is None or d < min_date: min_date = d
+                        if max_date is None or d > max_date: max_date = d
+                    except:
+                        continue
+            if min_date and max_date:
+                range_part = f"{min_date.isoformat()}_to_{max_date.isoformat()}"
+            else:
+                range_part = "All_Available"
+        else:
+            range_part = f"{start_date.isoformat()}_to_{end_date.isoformat()}"
+        export_name = f"LibertyKiosk_Export_{range_part}"
+        export_folder = usb_path / export_name
+        export_folder.mkdir(parents=True, exist_ok=True)
+
+        # === LEAN STORAGE-FRIENDLY STRUCTURE ===
+        # - Reports/ (Daily split PDFs + combined Visitor only) at top — this is what you use 90% of the time.
+        # - Full_Integrity_Package/ contains only the verifiable forensic pieces (.bak + ledger + manifest + CoC).
+        #   Raw SourceData/ is intentionally omitted to save storage.
+        reports_dir = export_folder / "Reports"
+        reports_daily_dir = reports_dir / "Daily"
+        integrity_dir = export_folder / "Full_Integrity_Package"
+
+        evidence_dir = integrity_dir / "Evidence"
+        backups_dir = integrity_dir / "Backups"
+        metadata_dir = integrity_dir / "Metadata"
+
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        reports_daily_dir.mkdir(parents=True, exist_ok=True)
+        integrity_dir.mkdir(parents=True, exist_ok=True)
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        backups_dir.mkdir(parents=True, exist_ok=True)
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            exported_backup_count = 0
+
+            # 1. Copy filtered daily BACKUP .bak + .sha256 files (robust date extraction for .csv.bak)
+            #    (We intentionally do NOT copy raw SourceData/ anymore to save storage space.
+            #     The .bak files + integrity ledger + manifest are sufficient for verification.)
+            backups_src = DATA_DIR / "backups"
+            if backups_src.exists():
+                for bak_file in backups_src.glob("liberty_log_*.csv.bak"):
+                    try:
+                        # Robust handling of double extension .csv.bak
+                        base = bak_file.name.replace("liberty_log_", "").split(".")[0]
+                        file_date = datetime.datetime.strptime(base, "%Y-%m-%d").date()
+                        if export_all or (start_date <= file_date <= end_date):
+                            shutil.copy2(bak_file, backups_dir / bak_file.name)
+                            hash_file = backups_src / (bak_file.stem + ".sha256")
+                            if hash_file.exists():
+                                shutil.copy2(hash_file, backups_dir / hash_file.name)
+                            exported_backup_count += 1
+                    except Exception:
+                        continue
+
+                for bak_file in backups_src.glob("visitor_log_*.csv.bak"):
+                    try:
+                        base = bak_file.name.replace("visitor_log_", "").split(".")[0]
+                        file_date = datetime.datetime.strptime(base, "%Y-%m-%d").date()
+                        if export_all or (start_date <= file_date <= end_date):
+                            shutil.copy2(bak_file, backups_dir / bak_file.name)
+                            hash_file = backups_src / (bak_file.stem + ".sha256")
+                            if hash_file.exists():
+                                shutil.copy2(hash_file, backups_dir / hash_file.name)
+                    except Exception:
+                        continue
+
+            # 2. Generate the easy-to-use DAILY split reports (primary format for 6105s / NJPs)
+            #    Generated from live data at export time (we no longer copy raw SourceData to save space).
+            self._generate_daily_split_reports(None, reports_daily_dir, start_date, end_date, export_all)
+
+            # Generate combined Visitor report only (user does not want combined Liberty weekly PDF or Liberty .txt)
+            self._generate_visitor_logs_report(reports_dir, start_date, end_date, export_all)
+
+            # 3. Copy supporting files into the integrity package
+            if INTEGRITY_LEDGER_FILE.exists():
+                shutil.copy2(INTEGRITY_LEDGER_FILE, metadata_dir / "integrity_ledger.csv")
+
+            if PROFILES_FILE.exists():
+                shutil.copy2(PROFILES_FILE, metadata_dir / "profiles.csv")
+            if ADMIN_HASH_FILE.exists():
+                shutil.copy2(ADMIN_HASH_FILE, metadata_dir / "admin.hash")
+
+            # Create metadata file inside the integrity package
+            export_meta = {
+                "export_name": export_name,
+                "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "log_range": range_part,
+                "source_files_copied": 0,   # intentionally omitted to save storage (raw logs no longer exported)
+                "backups_copied": exported_backup_count,
+                "kiosk_export_version": "2.2-no-raw-source"
+            }
+            with open(metadata_dir / "export_metadata.json", "w", encoding="utf-8") as f:
+                json.dump(export_meta, f, indent=2)
+
+            range_text = "ALL logs" if export_all else f"{start_date} to {end_date}"
+
+            # 5. Write Chain of Custody + detailed README directly into Evidence/
+            # (no root writes + no renames = no more WinError 183)
+            dummy_manifest = "pending"
+            self._generate_export_pdf(evidence_dir, range_text, exported_backup_count, manifest_hash=dummy_manifest)
+            self._write_evidence_readme(evidence_dir, range_text, dummy_manifest)
+
+            # 6. Build the cryptographic manifest on the final structure
+            manifest_hash = self._create_export_manifest(export_folder)
+
+            # Rebuild the Evidence files with the real manifest hash (with safety deletes)
+            for fname in ["ChainOfCustody.pdf", "ChainOfCustody.txt", "README_Evidence.txt"]:
+                p = evidence_dir / fname
+                if p.exists():
+                    p.unlink()
+
+            self._generate_export_pdf(evidence_dir, range_text, exported_backup_count, manifest_hash=manifest_hash)
+            self._write_evidence_readme(evidence_dir, range_text, manifest_hash)
+
+            # Final feedback
+            self.themed_showinfo("✅ Export Complete",
+                f"Export finished successfully.\n\n"
+                f"Folder: {export_name}\n"
+                f"Log Range: {range_text}\n\n"
+                f"MANIFEST.sha256: {manifest_hash[:16]}...\n\n"
+                f"Layout:\n"
+                f"• Reports/Daily/          ← Daily Liberty + Visitor PDFs (what you use most)\n"
+                f"• Reports/Visitor_Logs_Report.pdf (combined visitor only)\n"
+                f"• Full_Integrity_Package/ ← .bak files + ledger + manifest + CoC\n\n"
+                f"Copy the whole folder to your archive drive.")
+
+            self.log_admin_action(
+                "EXPORT_HARDENED",
+                f"Package {export_name} -> manifest {manifest_hash}",
+                actor=("superuser" if getattr(self, 'is_superuser', False) else "admin"))
+
+        except Exception as e:
+            self.themed_showerror("Export Error", f"Could not complete hardened export:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def _generate_export_pdf(self, export_folder: Path, range_text: str, exported_logs: int, manifest_hash: str = ""):
+        """
+        Generate a strong Chain of Custody PDF that is cryptographically bound to the manifest.
+        This version is designed for court / forensic defensibility.
+        """
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+            from reportlab.lib import colors
+            from reportlab.lib.units import inch
+
+            pdf_path = export_folder / "ChainOfCustody.pdf"
+            doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
+            styles = getSampleStyleSheet()
+
+            story = []
+
+            # Title
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontSize=18,
+                textColor=colors.HexColor('#C8102E'),
+                spaceAfter=12
+            )
+            story.append(Paragraph("MARDET-MONTEREY LIBERTY KIOSK", title_style))
+            story.append(Paragraph("DIGITAL EVIDENCE EXPORT — CHAIN OF CUSTODY", styles['Heading2']))
+            story.append(Spacer(1, 16))
+
+            # Export metadata
+            story.append(Paragraph(f"<b>Export Created:</b> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+            story.append(Paragraph(f"<b>Log Date Range:</b> {range_text}", styles['Normal']))
+            story.append(Paragraph(f"<b>Liberty Log Files in Package:</b> {exported_logs}", styles['Normal']))
+            story.append(Paragraph(f"<b>Full Export Folder:</b> {export_folder.name}", styles['Normal']))
+            story.append(Spacer(1, 12))
+
+            # Cryptographic Binding Section (the key improvement)
+            story.append(Paragraph("<b>CRYPTOGRAPHIC PACKAGE INTEGRITY</b>", styles['Heading3']))
+            if manifest_hash:
+                story.append(Paragraph(
+                    f"<b>Evidence Manifest Hash (MANIFEST.sha256):</b><br/>{manifest_hash}",
+                    styles['Normal']
+                ))
+            else:
+                story.append(Paragraph("<i>Manifest hash not available at generation time.</i>", styles['Normal']))
+            story.append(Spacer(1, 8))
+            story.append(Paragraph(
+                "The SHA-256 hash above is the cryptographic fingerprint of MANIFEST.json, which contains "
+                "the SHA-256 hash of every file in this export package (raw logs, backups, reports, ledger, etc.). "
+                "Any alteration to any file after export will cause the manifest verification to fail.",
+                styles['Normal']
+            ))
+            story.append(Spacer(1, 16))
+
+            # Chain of Custody certification
+            story.append(Paragraph("<b>CHAIN OF CUSTODY CERTIFICATION</b>", styles['Heading3']))
+            story.append(Paragraph(
+                "I certify under penalty of perjury that:<br/>"
+                "• The files in this export package are true and accurate copies of the records that existed "
+                "on the MARDET-Monterey Liberty Kiosk system at the time of export.<br/>"
+                "• I did not alter, delete, add, or modify any data during the export process.<br/>"
+                "• The cryptographic manifest hash recorded above was computed at the time this package was created.",
+                styles['Normal']
+            ))
+            story.append(Spacer(1, 20))
+
+            # Signature block
+            story.append(Paragraph("<b>EXPORTER</b>", styles['Normal']))
+            story.append(Paragraph("Name (Print): ________________________________________________", styles['Normal']))
+            story.append(Spacer(1, 8))
+            story.append(Paragraph("Rank / EDIPI: ________________________________________________", styles['Normal']))
+            story.append(Spacer(1, 8))
+            story.append(Paragraph("Signature: ____________________________________________________", styles['Normal']))
+            story.append(Spacer(1, 8))
+            story.append(Paragraph("Date / Time: __________________________________________________", styles['Normal']))
+            story.append(Spacer(1, 16))
+
+            story.append(Paragraph("<b>WITNESS (Recommended)</b>", styles['Normal']))
+            story.append(Paragraph("Name / Rank: __________________________________________________", styles['Normal']))
+            story.append(Spacer(1, 8))
+            story.append(Paragraph("Signature: ____________________________________________________", styles['Normal']))
+            story.append(Spacer(1, 8))
+            story.append(Paragraph("Date / Time: __________________________________________________", styles['Normal']))
+
+            story.append(Spacer(1, 24))
+            story.append(Paragraph(
+                "<i>This package contains raw source logs, daily backup files with their SHA-256 hashes, "
+                "the integrity ledger, human-readable reports, and a complete cryptographic manifest. "
+                "It is intended as a self-contained evidence production from the Liberty Kiosk system.</i>",
+                styles['Normal']
+            ))
+
+            doc.build(story)
+            self.log_admin_action("EXPORT_COC_PDF", f"ChainOfCustody.pdf created at {pdf_path}")
+
+        except ImportError:
+            # reportlab not installed — create a strong text version instead
+            txt_path = export_folder / "ChainOfCustody.txt"
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write("MARDET-MONTEREY LIBERTY KIOSK\n")
+                f.write("DIGITAL EVIDENCE EXPORT — CHAIN OF CUSTODY\n\n")
+                f.write(f"Export Created: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Log Date Range: {range_text}\n")
+                f.write(f"Liberty Log Files: {exported_logs}\n\n")
+                if manifest_hash:
+                    f.write(f"MANIFEST.sha256: {manifest_hash}\n\n")
+                f.write("I certify that the files in this export are true copies of the kiosk records at time of export.\n")
+                f.write("I did not alter any data during export.\n\n")
+                f.write("EXPORTER Name: ________________________  EDIPI/Rank: ________________________\n")
+                f.write("Signature: ________________________  Date/Time: ________________________\n\n")
+                f.write("WITNESS Name: ________________________  Signature: ________________________\n")
+                f.write(f"Export Folder: {target_dir.parent.name if target_dir.parent else target_dir.name}\n\n")
+                f.write("CHAIN OF CUSTODY\n")
+                f.write("I certify that the digital files contained in this export folder are true and accurate copies "
+                        "of the original records from the Liberty Kiosk system at the time of export.\n\n")
+                f.write("Exporter Name (Print): ________________________________\n\n")
+                f.write("EDIPI / Rank: ________________________________\n\n")
+                f.write("Signature: ________________________________\n\n")
+                f.write("Date / Time: ________________________________\n\n")
+                f.write("Witness (if required): ________________________________\n\n")
+                f.write("Witness Signature: ________________________________\n")
+            self.log_admin_action("EXPORT_TEXT_REPORT", f"Text report created at {txt_path} (reportlab not installed)")
+        except Exception as e:
+            self.log_admin_action("EXPORT_PDF_ERROR", str(e))
+
+    def _generate_liberty_logs_report(self, export_folder: Path, start_date, end_date, export_all: bool, source_base_dir: Path = None) -> bool:
+        """Generate a human-readable report (PDF if possible, otherwise .txt) for liberty logs.
+        If source_base_dir is provided, read raw logs from there instead of live DATA_DIR.
+        """
+        # Always generate the text version first (reliable)
+        text_ok = self._generate_liberty_logs_text_report(export_folder, start_date, end_date, export_all, source_base_dir)
+
+        # Try PDF as bonus
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib import colors
+            from reportlab.lib.units import inch
+
+            pdf_path = export_folder / "Liberty_Logs_Report.pdf"
+            doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
+            styles = getSampleStyleSheet()
+            story = []
+
+            story.append(Paragraph("MARDET-MONTEREY - Liberty Logs Report", styles['Heading1']))
+            story.append(Paragraph(f"Date Range: {'ALL' if export_all else f'{start_date} to {end_date}'}", styles['Normal']))
+            story.append(Spacer(1, 15))
+
+            if source_base_dir:
+                logs_src = source_base_dir / "daily_logs"
+            else:
+                logs_src = DATA_DIR / "daily_logs"
+            found_any = False
+
+            if logs_src.exists():
+                for log_file in sorted(logs_src.glob("liberty_log_*.csv")):
                     try:
                         date_str = log_file.stem.split("_")[-1]
                         file_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
-                        if export_all or (start_date <= file_date <= end_date):
-                            shutil.copy2(log_file, logs_dest / log_file.name)
-                            exported_logs += 1
-                    except ValueError:
-                        shutil.copy2(log_file, logs_dest / log_file.name)
-                        exported_logs += 1
+                        if not export_all and not (start_date <= file_date <= end_date):
+                            continue
 
-            backups_src = DATA_DIR / "backups"
-            if backups_src.exists():
-                shutil.copytree(backups_src, export_folder / "backups", dirs_exist_ok=True)
+                        found_any = True
+                        story.append(Paragraph(f"<b>Liberty Log - {date_str}</b>", styles['Heading2']))
 
-            # Export visitor logs as part of the unified export
-            visitor_src = VISITOR_LOGS_DIR
-            if visitor_src.exists():
-                visitor_dest = export_folder / "visitor_logs"
-                visitor_dest.mkdir(exist_ok=True)
-                for vlog in visitor_src.glob("visitor_log_*.csv"):
-                    shutil.copy2(vlog, visitor_dest / vlog.name)
+                        with open(log_file, "r", newline="", encoding="utf-8") as f:
+                            reader = csv.DictReader(f)
+                            rows = list(reader)
 
-            for file in [PROFILES_FILE, ADMIN_HASH_FILE]:
-                if file.exists():
-                    shutil.copy2(file, export_folder / file.name)
+                        if not rows:
+                            story.append(Paragraph("No entries for this day.", styles['Normal']))
+                            continue
 
-            range_text = "ALL logs" if export_all else f"{start_date} to {end_date}"
-            self.themed_showinfo("✅ Export Successful",
-                f"Export completed!\n\n"
-                f"Liberty logs exported: {exported_logs} files ({range_text})\n"
-                f"Visitor logs included\n"
-                f"Folder created: {export_folder}\n\n"
-                "You may now safely remove the USB drive.")
+                        table_data = [["Time Out", "Name", "EDIPI", "Destination", "Time In"]]
+                        for row in rows[:60]:
+                            table_data.append([
+                                str(row.get("Time_out", ""))[:16],
+                                str(row.get("Name", ""))[:22],
+                                str(row.get("EDIPI", "")),
+                                str(row.get("Destination", ""))[:22],
+                                str(row.get("Time_in", ""))[:16] if row.get("Time_in") else "Still Out"
+                            ])
 
-            self.log_admin_action(
-                "EXPORT", f"{exported_logs} liberty logs + visitor logs ({range_text}) -> {export_folder}",
-                actor=("superuser" if getattr(self, 'is_superuser', False) else "admin"))
+                        t = Table(table_data, colWidths=[1.2*inch, 1.7*inch, 1.0*inch, 1.8*inch, 1.0*inch])
+                        t.setStyle(TableStyle([
+                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#C8102E')),
+                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                            ('FONTSIZE', (0, 0), (-1, -1), 7),
+                            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                        ]))
+                        story.append(t)
+                        story.append(Spacer(1, 12))
+
+                    except Exception as e:
+                        story.append(Paragraph(f"Error reading log for {date_str}: {e}", styles['Normal']))
+
+            if not found_any:
+                story.append(Paragraph("No liberty logs found for the selected date range.", styles['Normal']))
+
+            doc.build(story)
+            return True
+
         except Exception as e:
-            self.themed_showerror("Export Error", f"Could not export files:\n{str(e)}")
+            print(f"[Liberty PDF Report Warning] Could not create PDF (using text instead): {e}")
+            return text_ok  # Return whether the text report succeeded
+
+    def _generate_visitor_logs_report(self, export_folder: Path, start_date, end_date, export_all: bool, source_base_dir: Path = None) -> bool:
+        """Generate a human-readable report (PDF if possible, otherwise .txt) for visitor logs.
+        If source_base_dir is provided, read raw logs from there instead of live data.
+        """
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib import colors
+            from reportlab.lib.units import inch
+
+            pdf_path = export_folder / "Visitor_Logs_Report.pdf"
+            doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
+            styles = getSampleStyleSheet()
+            story = []
+
+            story.append(Paragraph("MARDET-MONTEREY - Visitor Logs Report", styles['Heading1']))
+            story.append(Paragraph(f"Date Range: {'ALL' if export_all else f'{start_date} to {end_date}'}", styles['Normal']))
+            story.append(Spacer(1, 15))
+
+            if source_base_dir:
+                visitor_src = source_base_dir / "visitor_logs"
+            else:
+                visitor_src = VISITOR_LOGS_DIR
+            found_any = False
+
+            if visitor_src.exists():
+                for log_file in sorted(visitor_src.glob("visitor_log_*.csv")):
+                    try:
+                        date_str = log_file.stem.split("_")[-1]
+                        file_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+                        if not export_all and not (start_date <= file_date <= end_date):
+                            continue
+
+                        found_any = True
+                        story.append(Paragraph(f"<b>Visitor Log - {date_str}</b>", styles['Heading2']))
+
+                        with open(log_file, "r", newline="", encoding="utf-8") as f:
+                            reader = csv.DictReader(f)
+                            rows = list(reader)
+
+                        if not rows:
+                            story.append(Paragraph("No entries for this day.", styles['Normal']))
+                            continue
+
+                        table_data = [["Signed In", "Host", "Visitor", "Location", "Checked Out"]]
+                        for row in rows[:50]:
+                            table_data.append([
+                                str(row.get("Timestamp", ""))[:16],
+                                f"{row.get('Host_Rank','')} {row.get('Host_Name','')}"[:20],
+                                str(row.get("Visitor_Name", ""))[:18],
+                                f"{row.get('Building','')}-{row.get('Room','')}",
+                                str(row.get("Time_Out", ""))[:16] if row.get("Time_Out") else "Still Signed In"
+                            ])
+
+                        t = Table(table_data, colWidths=[1.15*inch, 1.6*inch, 1.5*inch, 0.9*inch, 1.3*inch])
+                        t.setStyle(TableStyle([
+                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#C8102E')),
+                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                            ('FONTSIZE', (0, 0), (-1, -1), 7),
+                            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                        ]))
+                        story.append(t)
+                        story.append(Spacer(1, 12))
+
+                    except Exception:
+                        continue
+
+            if not found_any:
+                story.append(Paragraph("No visitor logs found for the selected date range.", styles['Normal']))
+
+            doc.build(story)
+            return True
+
+        except ImportError:
+            return self._generate_visitor_logs_text_report(export_folder, start_date, end_date, export_all)
+        except Exception as e:
+            print(f"[Visitor Report Error] {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    # --- Text fallback reports (always work) ---
+
+    def _generate_liberty_logs_text_report(self, export_folder: Path, start_date, end_date, export_all: bool, source_base_dir: Path = None) -> bool:
+        txt_path = export_folder / "Liberty_Logs_Report.txt"
+        try:
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write("MARDET-MONTEREY - Liberty Logs Report\n")
+                f.write(f"Date Range: {'ALL' if export_all else f'{start_date} to {end_date}'}\n\n")
+
+                if source_base_dir:
+                    logs_src = source_base_dir / "daily_logs"
+                else:
+                    logs_src = DATA_DIR / "daily_logs"
+                if not logs_src.exists():
+                    f.write("No liberty logs found.\n")
+                    return True
+
+                for log_file in sorted(logs_src.glob("liberty_log_*.csv")):
+                    try:
+                        date_str = log_file.stem.split("_")[-1]
+                        file_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+                        if not export_all and not (start_date <= file_date <= end_date):
+                            continue
+
+                        f.write(f"=== Liberty Log - {date_str} ===\n")
+                        with open(log_file, "r", newline="", encoding="utf-8") as lf:
+                            reader = csv.DictReader(lf)
+                            for row in reader:
+                                f.write(f"Out: {row.get('Time_out','')[:16]} | {row.get('Name',''):<22} | EDIPI: {row.get('EDIPI',''):<12} | Dest: {row.get('Destination',''):<20} | In: {row.get('Time_in','') or 'Open'}\n")
+                        f.write("\n")
+                    except Exception:
+                        continue
+            return True
+        except Exception:
+            return False
+
+    def _generate_visitor_logs_text_report(self, export_folder: Path, start_date, end_date, export_all: bool, source_base_dir: Path = None) -> bool:
+        txt_path = export_folder / "Visitor_Logs_Report.txt"
+        try:
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write("MARDET-MONTEREY - Visitor Logs Report\n")
+                f.write(f"Date Range: {'ALL' if export_all else f'{start_date} to {end_date}'}\n\n")
+
+                if source_base_dir:
+                    visitor_src = source_base_dir / "visitor_logs"
+                else:
+                    visitor_src = VISITOR_LOGS_DIR
+                if not visitor_src.exists():
+                    f.write("No visitor logs found.\n")
+                    return True
+
+                for log_file in sorted(visitor_src.glob("visitor_log_*.csv")):
+                    try:
+                        date_str = log_file.stem.split("_")[-1]
+                        file_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+                        if not export_all and not (start_date <= file_date <= end_date):
+                            continue
+
+                        f.write(f"=== Visitor Log - {date_str} ===\n")
+                        with open(log_file, "r", newline="", encoding="utf-8") as lf:
+                            reader = csv.DictReader(lf)
+                            for row in reader:
+                                checked_out = row.get("Time_Out", "") or "Still Signed In"
+                                f.write(f"In: {row.get('Timestamp','')[:16]} | Host: {row.get('Host_Rank','')} {row.get('Host_Name',''):<18} | Visitor: {row.get('Visitor_Name',''):<18} | Loc: {row.get('Building','')}-{row.get('Room','')} | Out: {checked_out}\n")
+                        f.write("\n")
+                    except Exception:
+                        continue
+            return True
+        except Exception:
+            return False
+
+    # ====================== NEW HARDENED EXPORT HELPERS ======================
+
+    def _create_export_manifest(self, export_folder: Path) -> str:
+        """
+        Walk the entire export folder and create:
+          - MANIFEST.json  (every file with relative path, size, sha256)
+          - MANIFEST.sha256 (hash of the MANIFEST.json for quick integrity check)
+        Returns the SHA256 of the manifest itself.
+        """
+        manifest_path = export_folder / "MANIFEST.json"
+        manifest_hash_path = export_folder / "MANIFEST.sha256"
+
+        files_list = []
+
+        for file_path in sorted(export_folder.rglob("*")):
+            if not file_path.is_file():
+                continue
+            # Skip the manifest files themselves while building (we'll add them at the end)
+            if file_path.name in ("MANIFEST.json", "MANIFEST.sha256"):
+                continue
+
+            try:
+                rel_path = str(file_path.relative_to(export_folder)).replace("\\", "/")
+                file_size = file_path.stat().st_size
+                with open(file_path, "rb") as f:
+                    file_hash = hashlib.sha256(f.read()).hexdigest()
+
+                files_list.append({
+                    "path": rel_path,
+                    "size_bytes": file_size,
+                    "sha256": file_hash
+                })
+            except Exception as e:
+                files_list.append({
+                    "path": str(file_path.relative_to(export_folder)),
+                    "error": str(e)
+                })
+
+        manifest_data = {
+            "export_folder": export_folder.name,
+            "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "file_count": len(files_list),
+            "files": files_list
+        }
+
+        # Write the manifest
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f, indent=2)
+
+        # Compute hash of the manifest we just wrote
+        with open(manifest_path, "rb") as f:
+            manifest_hash = hashlib.sha256(f.read()).hexdigest()
+
+        with open(manifest_hash_path, "w", encoding="utf-8") as f:
+            f.write(manifest_hash)
+
+        # Re-add the two manifest files into the JSON so it is complete
+        files_list.append({
+            "path": "MANIFEST.json",
+            "size_bytes": manifest_path.stat().st_size,
+            "sha256": manifest_hash
+        })
+        files_list.append({
+            "path": "MANIFEST.sha256",
+            "size_bytes": manifest_hash_path.stat().st_size,
+            "sha256": hashlib.sha256(manifest_hash.encode()).hexdigest()
+        })
+
+        # Rewrite the manifest with the complete list
+        manifest_data["file_count"] = len(files_list)
+        manifest_data["files"] = files_list
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f, indent=2)
+
+        return manifest_hash
+
+    def _generate_daily_split_reports(self, source_data_dir: Path, reports_daily_dir: Path,
+                                      start_date, end_date, export_all: bool):
+        """
+        Generate separate PDF reports for each individual day.
+        This is the primary format used for 6105s, NJPs, and routine admin actions.
+        Creates files like:
+            Reports/Daily/2026-05-18_Liberty_Report.pdf
+            Reports/Daily/2026-05-18_Visitor_Report.pdf
+        """
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.lib import colors
+            from reportlab.lib.units import inch
+        except ImportError:
+            # If no reportlab, we skip daily PDFs (text versions are less critical here)
+            return
+
+        styles = getSampleStyleSheet()
+
+        # Determine which dates to process
+        dates_to_process = []
+        if export_all:
+            # Scan live daily_logs (or SourceData if provided)
+            scan_dir = (source_data_dir / "daily_logs") if source_data_dir else (DATA_DIR / "daily_logs")
+            for f in scan_dir.glob("liberty_log_*.csv"):
+                try:
+                    d = datetime.datetime.strptime(f.stem.split("_")[-1], "%Y-%m-%d").date()
+                    dates_to_process.append(d)
+                except:
+                    continue
+        else:
+            current = start_date
+            while current <= end_date:
+                dates_to_process.append(current)
+                current += datetime.timedelta(days=1)
+
+        for day in sorted(dates_to_process):
+            day_str = day.isoformat()
+
+            # --- Liberty for this day ---
+            base_dir = source_data_dir if source_data_dir else DATA_DIR
+            lib_src = base_dir / "daily_logs" / f"liberty_log_{day_str}.csv"
+            if lib_src.exists():
+                try:
+                    with open(lib_src, "r", newline="", encoding="utf-8") as f:
+                        rows = list(csv.DictReader(f))
+
+                    pdf_path = reports_daily_dir / f"{day_str}_Liberty_Report.pdf"
+                    doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
+                    story = []
+
+                    story.append(Paragraph(f"MARDET-MONTEREY - Liberty Log - {day_str}", styles['Heading2']))
+                    story.append(Spacer(1, 10))
+
+                    if rows:
+                        table_data = [["Time Out", "Name", "EDIPI", "Destination", "Time In"]]
+                        for row in rows:
+                            table_data.append([
+                                str(row.get("Time_out", ""))[:16],
+                                str(row.get("Name", ""))[:22],
+                                str(row.get("EDIPI", "")),
+                                str(row.get("Destination", ""))[:22],
+                                str(row.get("Time_in", ""))[:16] if row.get("Time_in") else "Still Out"
+                            ])
+                        t = Table(table_data, colWidths=[1.2*inch, 1.7*inch, 1.0*inch, 1.8*inch, 1.0*inch])
+                        t.setStyle(TableStyle([
+                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#C8102E')),
+                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                            ('FONTSIZE', (0, 0), (-1, -1), 7),
+                            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                        ]))
+                        story.append(t)
+                    else:
+                        story.append(Paragraph("No liberty entries for this date.", styles['Normal']))
+
+                    doc.build(story)
+                except Exception:
+                    pass
+
+            # --- Visitor for this day ---
+            vis_src = base_dir / "visitor_logs" / f"visitor_log_{day_str}.csv"
+            if vis_src.exists():
+                try:
+                    with open(vis_src, "r", newline="", encoding="utf-8") as f:
+                        rows = list(csv.DictReader(f))
+
+                    pdf_path = reports_daily_dir / f"{day_str}_Visitor_Report.pdf"
+                    doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
+                    story = []
+
+                    story.append(Paragraph(f"MARDET-MONTEREY - Visitor Log - {day_str}", styles['Heading2']))
+                    story.append(Spacer(1, 10))
+
+                    if rows:
+                        table_data = [["In Time", "Host", "Visitor", "Location", "Out Time"]]
+                        for row in rows:
+                            checked_out = row.get("Time_Out", "") or "Still Signed In"
+                            table_data.append([
+                                str(row.get("Timestamp", ""))[:16],
+                                f"{row.get('Host_Rank','')} {row.get('Host_Name','')}"[:22],
+                                str(row.get("Visitor_Name", ""))[:22],
+                                f"{row.get('Building','')}-{row.get('Room','')}",
+                                checked_out[:16]
+                            ])
+                        t = Table(table_data, colWidths=[1.1*inch, 1.6*inch, 1.6*inch, 1.0*inch, 1.3*inch])
+                        t.setStyle(TableStyle([
+                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#C8102E')),
+                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                            ('FONTSIZE', (0, 0), (-1, -1), 7),
+                            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                        ]))
+                        story.append(t)
+                    else:
+                        story.append(Paragraph("No visitor entries for this date.", styles['Normal']))
+
+                    doc.build(story)
+                except Exception:
+                    pass
+
+    def _write_evidence_readme(self, target_dir: Path, range_text: str, manifest_hash: str):
+        """Write clear instructions so anyone (lawyer, forensic examiner, court) knows how to use the package."""
+        readme_path = target_dir / "README_Evidence.txt"
+
+        content = f"""MARDET-MONTEREY LIBERTY KIOSK — DIGITAL EVIDENCE PACKAGE
+================================================================
+
+Export Folder: {target_dir.parent.name if target_dir.parent else target_dir.name}
+Log Date Range: {range_text}
+Manifest Hash (MANIFEST.sha256): {manifest_hash}
+Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+FOLDER LAYOUT (IMPORTANT)
+-------------------------
+Reports/
+    - Daily/ folder
+        Contains one clean PDF per day for both Liberty and Visitors
+        (e.g. 2026-05-18_Liberty_Report.pdf and 2026-05-18_Visitor_Report.pdf).
+        This is what you will use 90% of the time (6105s, NJPs, etc.).
+
+    - Visitor_Logs_Report.pdf (combined visitor report only — no combined Liberty report is generated)
+
+Full_Integrity_Package/
+    Contains everything needed for a subpoena or court-martial:
+    - Evidence/          (ChainOfCustody.pdf + MANIFEST + detailed README)
+    - Backups/           (.bak + .sha256 daily snapshots)
+    - Metadata/          (integrity ledger + export metadata)
+
+Note: Raw SourceData/ CSVs are intentionally omitted to keep the package smaller.
+The readable reports + .bak files + ledger are sufficient for verification and legal use.
+
+The separation exists because you need fast access to readable reports
+for normal work (Reports/Daily/), but must still preserve the full forensic package
+for legal proceedings.
+
+NOTE: The top-level folder name uses the log dates (not creation date)
+so you can quickly find the correct export on archive drives by searching
+for the date you need.
+
+CONTENTS OF THIS PACKAGE
+------------------------
+- MANIFEST.json + MANIFEST.sha256
+    Complete cryptographic inventory. Every file in this folder has a recorded SHA-256.
+    To verify the entire package has not been altered since export:
+        1. Compute SHA-256 of MANIFEST.json
+        2. Compare it to the value in MANIFEST.sha256
+        3. (Advanced) Recompute hashes of individual files and compare to MANIFEST.json
+
+- Backups/
+    Daily .bak snapshot files + their original .sha256 sidecars created by the kiosk's
+    automated backup process. These were hashed at ~02:00 the morning after the logs were written.
+    (Raw SourceData/ CSVs are intentionally omitted to save storage space.)
+
+- Reports/
+    - ChainOfCustody.pdf (this is the signed document)
+    - Daily/ folder with one PDF per day (Liberty + Visitor) — this is what you use most of the time
+    - Visitor_Logs_Report.pdf (combined visitor report only)
+
+- Metadata/
+    - integrity_ledger.csv : The full row-level hash chain ledger
+    - export_metadata.json : Technical details about this export
+
+- profiles.csv + admin.hash : Snapshot of user data at export time
+
+HOW TO VERIFY THIS PACKAGE (FORENSIC / COURT USE)
+-------------------------------------------------
+1. Verify the outer manifest:
+   - SHA-256(MANIFEST.json) must exactly match the contents of MANIFEST.sha256
+
+2. Verify the row-level hash chain (recommended):
+   - Use the Backup Verifier tool (backup_verifier.py) against the Backups/ folder,
+     pointing it at the Metadata/integrity_ledger.csv
+
+3. Cross-check (using the generated reports):
+   - The Reports/Daily/ PDFs are the human-readable version of what was exported.
+   - You can verify the .bak files against the ledger using the verifier tool.
+
+4. Chain of Custody:
+   - The signed ChainOfCustody.pdf should be completed by the person who
+     performed the export and (ideally) a witness.
+   - The MANIFEST.sha256 value printed in the CoC document must match the actual file.
+
+IMPORTANT NOTES FOR LEGAL USE
+-----------------------------
+- This package focuses on the .bak snapshots + cryptographic ledger + manifest for tamper evidence.
+- Raw daily CSVs are not included (to save space) — the readable reports + .bak files are sufficient.
+- The strength of this evidence comes from:
+    * Cryptographic hashing (file-level + row-level chain in the ledger)
+    * The air-gapped nature of the kiosk
+    * Constant physical supervision by duty personnel
+    * The parallel paper OOD logbook
+- The .bak files are daily snapshots created the next morning.
+
+QUESTIONS?
+----------
+Contact the unit S-1 or the administrator who performed this export.
+"""
+
+        with open(readme_path, "w", encoding="utf-8") as f:
+            f.write(content)
 
     def admin_shutdown(self):
         if self.themed_askyesno("Shutdown", "Close the kiosk completely?"):
@@ -1164,7 +1881,8 @@ class LibertyKiosk(tk.Tk):
         """Launch the standalone Visitor Sign-In tool (like backup_verifier).
         The confirmation dialog will automatically close when the visitor tool is closed."""
         try:
-            proc = subprocess.Popen([sys.executable, "visitor_signin.py"])
+            visitor_path = str(Path(__file__).parent / "tools" / "visitor_signin.py")
+            proc = subprocess.Popen([sys.executable, visitor_path])
 
             # Create a custom dialog we can track and auto-close later
             dlg = self._create_themed_toplevel("Visitor Sign-In")

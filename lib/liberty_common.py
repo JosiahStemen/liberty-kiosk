@@ -23,16 +23,79 @@ from kiosk_config import (
     VISITOR_LOGS_DIR,
     DAILY_LOGS_DIR,
     BACKUPS_DIR,
+    INTEGRITY_LEDGER_FILE,
     ensure_data_directories,
     get_daily_log_path,
     get_visitor_log_path,
+    # Colors centralized in kiosk_config for theming consistency
+    USMC_RED,
+    USMC_GOLD,
+    USMC_DARK,
+    BG_COLOR,
 )
 
-# ====================== USMC COLORS (shared theme) ======================
-USMC_RED = "#C8102E"
-USMC_GOLD = "#FFCC00"
-USMC_DARK = "#001F3F"
-BG_COLOR = "#001F3F"
+# ====================== SEPARATE HASH LEDGER FOR LOG INTEGRITY ======================
+# Hashes are stored in a dedicated ledger file so the main logs remain clean
+# and easy for humans (duty personnel, OOD, etc.) to read and print.
+
+INTEGRITY_LEDGER_HEADERS = [
+    "LedgerTimestamp", "LogType", "LogDate", "OriginalRowKey",
+    "PreviousHash", "RowHash"
+]
+
+
+def _compute_row_hash(row_data: dict, previous_hash: str) -> str:
+    """
+    Compute a deterministic hash for a log row.
+    """
+    # Exclude any hash fields if present
+    data_to_hash = {k: v for k, v in row_data.items() 
+                    if k not in ("PreviousHash", "RowHash")}
+    data_to_hash["PreviousHash"] = previous_hash or ""
+
+    serialized = "|".join(f"{k}={data_to_hash[k]}" for k in sorted(data_to_hash.keys()))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def get_last_row_hash(log_type: str, log_date: str) -> str:
+    """
+    Return the most recent RowHash for a given log type and date from the ledger.
+    log_type: "liberty" or "visitor"
+    log_date: "YYYY-MM-DD"
+    """
+    if not INTEGRITY_LEDGER_FILE.exists():
+        return ""
+
+    with open(INTEGRITY_LEDGER_FILE, "r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        last_hash = ""
+        for row in reader:
+            if row.get("LogType") == log_type and row.get("LogDate") == log_date:
+                last_hash = row.get("RowHash", "") or ""
+        return last_hash
+
+
+def record_hash_entry(log_type: str, log_date: str, original_row_key: str, 
+                      previous_hash: str, row_hash: str):
+    """Append a hash entry to the integrity ledger."""
+    ensure_data_directories()
+    ledger_exists = INTEGRITY_LEDGER_FILE.exists()
+
+    with open(INTEGRITY_LEDGER_FILE, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=INTEGRITY_LEDGER_HEADERS)
+        if not ledger_exists:
+            writer.writeheader()
+
+        writer.writerow({
+            "LedgerTimestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "LogType": log_type,
+            "LogDate": log_date,
+            "OriginalRowKey": original_row_key,
+            "PreviousHash": previous_hash,
+            "RowHash": row_hash
+        })
+
+# Colors are now imported from kiosk_config (single source of truth for branding)
 
 # ====================== PASSWORD / PIN HASHING ======================
 PBKDF2_ITERATIONS = 200_000
@@ -183,7 +246,8 @@ def find_open_entry(edipi: str):
 # ====================== VISITOR LOGGING ======================
 VISITOR_LOG_HEADERS = [
     "Timestamp", "Host_Rank", "Host_Name", "Host_EDIPI",
-    "Visitor_Name", "Building", "Room", "Time_Out"
+    "Visitor_Name", "Building", "Room", "Time_Out",
+    "PreviousHash", "RowHash"
 ]
 
 
@@ -218,22 +282,41 @@ def init_visitor_log():
 
 
 def log_visitor_signin(host_rank, host_name, host_edipi, visitor_name, building, room):
-    """Append a visitor sign-in record (Time_Out left blank until checked out)."""
+    """Append a visitor sign-in record. Hashes are recorded in a separate integrity ledger."""
     init_visitor_log()
     log_file = get_today_visitor_log_filename()
+
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_date = datetime.date.today().isoformat()
+
+    previous_hash = get_last_row_hash("visitor", log_date)
+
+    row_data = {
+        "Timestamp": timestamp,
+        "Host_Rank": host_rank,
+        "Host_Name": host_name,
+        "Host_EDIPI": host_edipi,
+        "Visitor_Name": visitor_name,
+        "Building": building,
+        "Room": room,
+        "Time_Out": ""
+    }
+
+    row_hash = _compute_row_hash(row_data, previous_hash)
+
+    # Record in separate ledger instead of the main log
+    record_hash_entry(
+        log_type="visitor",
+        log_date=log_date,
+        original_row_key=f"{timestamp}|{visitor_name}",
+        previous_hash=previous_hash,
+        row_hash=row_hash
+    )
+
+    # Write clean row to the main visitor log (no hash columns)
     with open(log_file, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=VISITOR_LOG_HEADERS)
-        writer.writerow({
-            "Timestamp": timestamp,
-            "Host_Rank": host_rank,
-            "Host_Name": host_name,
-            "Host_EDIPI": host_edipi,
-            "Visitor_Name": visitor_name,
-            "Building": building,
-            "Room": room,
-            "Time_Out": ""
-        })
+        writer.writerow(row_data)
 
 
 def checkout_visitor(timestamp: str, host_edipi: str, visitor_name: str) -> bool:

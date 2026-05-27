@@ -7,7 +7,7 @@ This helps keep the main GUI file cleaner and allows the visitor tool
 """
 
 import tkinter as tk
-from .kiosk_config import BG_COLOR, USMC_GOLD, USMC_DARK, USMC_RED
+from kiosk_config import BG_COLOR, USMC_GOLD, USMC_DARK, USMC_RED
 
 
 class ThemedDialogs:

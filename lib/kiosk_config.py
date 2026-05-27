@@ -27,6 +27,7 @@ PROFILES_FILE = DATA_DIR / "profiles.csv"
 ADMIN_HASH_FILE = DATA_DIR / "admin.hash"
 AUDIT_FILE = DATA_DIR / "admin_audit.csv"
 SUPERUSER_HASH_FILE = Path("superuser_hash.txt")   # Kept in root for break-glass access
+INTEGRITY_LEDGER_FILE = DATA_DIR / "integrity_ledger.csv"
 
 # ====================== SECURITY ======================
 DEFAULT_ADMIN_PASSWORD = "LibertyKiosk2026!"
@@ -35,6 +36,12 @@ PBKDF2_ITERATIONS = 200_000
 # ====================== BRANDING / UNIT INFO ======================
 KIOSK_TITLE = "MARDET-MONTEREY LIBERTY KIOSK"
 UNIT_NAME = "MARDET-MONTEREY"
+
+# USMC Official Colors (central source of truth for theming)
+USMC_RED = "#C8102E"
+USMC_GOLD = "#FFCC00"
+USMC_DARK = "#001F3F"
+BG_COLOR = "#001F3F"   # Same as USMC_DARK for dark backgrounds
 
 # ====================== BACKUP SCHEDULER ======================
 BACKUP_HOUR = 2          # Run daily backup at 02:00

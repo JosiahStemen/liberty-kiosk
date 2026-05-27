@@ -4,6 +4,9 @@
 
 This GUI application allows Marines to quickly check in and out for liberty using their CAC cards at a dedicated kiosk station.
 
+> **Important Note for Legal / Audit Review**  
+> This system is designed to operate in an **air-gapped environment under constant duty watch**. It is intended to operate **in parallel with** the unit’s existing physical OOD logbook. The digital records are designed to be human-readable while also incorporating cryptographic controls for integrity. See the sections below on Cryptographic Integrity Controls and Legal Considerations.
+
 ## ✨ Features
 
 - **CAC Barcode Scanning**: Scans the *front* of the Common Access Card (CAC) via USB barcode reader (emulates keyboard input)
@@ -25,14 +28,27 @@ This GUI application allows Marines to quickly check in and out for liberty usin
 - **Daily Logging & Automated Backups**: Logs all activity with daily CSV files + SHA-256 hashed backups
 - **USMC-Themed UI**: Red, gold, and dark blue color scheme
 
-## 🚀 Quick Start
+## Deployment & Quick Start
 
-1. Ensure Python 3 is installed on the kiosk computer.
-2. Place all project files in a directory.
-3. Run the main application:
-   python liberty_kiosk_gui.py
-4. The application launches in fullscreen mode.
-5. Immediately go to ADMIN MENU → Change Admin Password (default: LibertyKiosk2026!)
+### Minimal Deployment on the Kiosk Machine
+1. Copy the following to the kiosk computer:
+   - `liberty_kiosk_gui.py`
+   - The entire `lib/` folder
+   - The `dependencies/` folder
+   - (The `liberty_data/` folder will be created automatically)
+
+2. Install dependencies:
+   ```bash
+   pip install -r dependencies/requirements.txt
+   ```
+
+3. (Recommended) Use the provided launcher:
+   Double-click `run_kiosk.bat`
+
+4. On first run, go to the Admin Menu and immediately change the default admin password.
+
+### Launcher
+A simple `run_kiosk.bat` is included in the root for easy startup on the kiosk machine.
 
 📋 First-Time Marine Registration
 When a new CAC is scanned:
@@ -73,56 +89,125 @@ When you log in with the superuser password, two extra red buttons appear at the
 
 Never share your superuser password or the superuser_hash.txt file.
 
-📁 Project Structure
+## Project Structure (Clean Deployment Layout)
+
+```
 liberty-kiosk/
-├── liberty_kiosk_gui.py          # Main kiosk application
-├── kiosk_config.py               # Centralized configuration (paths, security settings, etc.)
-├── kiosk_ui.py                   # Shared themed UI components and dialogs
-├── liberty_common.py             # Shared utilities (hashing, CAC parsing, profile loading, etc.)
-├── visitor_signin.py             # Standalone Visitor Check-In/Out tool (launched from main GUI)
-├── backup_verifier.py            # Backup integrity checker
-├── create_test_data.py           # Generate realistic test logs
+├── liberty_kiosk_gui.py          # ← Main application to run on the kiosk
+├── liberty_data/                 # ← All operational data (gitignored)
+│   ├── daily_logs/
+│   ├── visitor logs/
+│   ├── backups/
+│   └── integrity_ledger.csv
+├── dependencies/
+│   └── requirements.txt
+├── lib/                          # Internal shared code modules
+│   ├── liberty_common.py
+│   ├── kiosk_config.py
+│   ├── kiosk_ui.py
+│   └── ...
+├── tools/                        # Administrative and testing tools
+│   ├── visitor_signin.py
+│   ├── backup_verifier.py
+│   └── create_test_data.py
+├── run_kiosk.bat                 # Simple launcher for the main application
 ├── README.md
-├── .gitignore                    # Keeps PII/CUI + credential hashes out of git
-├── superuser_hash.txt            # Private superuser hash (gitignored — never commit)
-└── liberty_data/                 # Auto-created at runtime (gitignored)
-    ├── profiles.csv              # All Marine profiles
-    ├── admin.hash                # Shared admin password hash (salted PBKDF2)
-    ├── admin_audit.csv           # Admin action audit trail (logins, exports, etc.)
-    ├── daily_logs/               # Daily liberty logs (CSV)
-    ├── visitor logs/             # Visitor sign-in/check-out logs (separate folder)
-    └── backups/                  # Daily backups + SHA256 hashes
-⚠️ Important: Do not manually delete or modify files in liberty_data/.
+└── .gitignore
+```
 
-🛡️ Security
+### Minimal Files Needed on the Kiosk Machine
+- `liberty_kiosk_gui.py`
+- The entire `lib/` folder
+- The `dependencies/` folder (install packages listed in `requirements.txt`)
+- The `liberty_data/` folder (created automatically on first run)
+├── tools/                        # Utility / admin scripts
+│   ├── visitor_signin.py
+│   ├── backup_verifier.py
+│   └── create_test_data.py
+├── README.md
+└── .gitignore
 
-All PINs and admin/superuser passwords stored as salted PBKDF2-HMAC-SHA256 hashes (legacy SHA-256 hashes auto-upgrade on next successful login)
-Credential hashes and all PII/CUI are excluded from git via .gitignore — never commit liberty_data/ or the hash files
-Admin actions (logins, password changes, force check-ins, exports) are recorded in liberty_data/admin_audit.csv
-No full CAC data stored — only parsed name/rank/EDIPI
-Daily automated backups with cryptographic integrity verification
-Export function includes strong PII/CUI warnings
-Escape key opens admin menu (for quick access)
+When deploying to the kiosk machine, the main things you need are:
+- liberty_kiosk_gui.py
+- The dependencies/ folder (install from requirements.txt)
+- The liberty_data/ folder (created automatically on first run)
+- The lib/ folder (required by the main app)
 
-🛠️ Additional Tools
+## Legal & Evidentiary Considerations
 
-liberty_common.py
-Shared code used by the main kiosk and standalone tools (PIN hashing, CAC parsing, profile loading, "is on liberty?" checks, visitor logging, etc.). This is the foundation for the modular design.
+This system operates under the following controls that are relevant to evidentiary use:
 
-kiosk_config.py
-Centralized configuration for paths, security settings, and helper functions.
+- **Air-gapped environment** — No network connectivity.
+- **Constant physical supervision** — The kiosk is under continuous duty watch.
+- **Parallel physical record** — A traditional paper OOD logbook is maintained alongside the digital system.
+- **Cryptographic integrity controls** — See "Cryptographic Integrity Controls" section below.
+- **Human-readable logs** — Liberty and visitor logs are deliberately kept in CSV format (with a separate integrity ledger) so that duty personnel and leadership can directly review them without specialized software.
 
-kiosk_ui.py
-Reusable themed UI components and dialogs for consistent red/gold styling across tools.
+**Important Limitation**: This system is **not** designed to be the sole record of liberty accountability. It is intended as a **supplement** to the unit’s physical logbook. Any digital record should be corroborated with the contemporaneous paper log and witness testimony.
 
-visitor_signin.py
-Standalone Visitor Check-In/Out application. Launched by clicking "CHECK IN/OUT VISITOR" on the main kiosk (left side). The host Marine must **not** be currently checked out on liberty to sign in a visitor (this is enforced). Supports both signing visitors in and checking them out.
+## Cryptographic Integrity Controls
 
-backup_verifier.py
-Launches a separate GUI to verify that backup files match their SHA-256 hashes.
+The system uses a layered approach to detect tampering while preserving human readability:
 
-create_test_data.py
-Generates realistic test data (logs + backups) for testing the system.
+### 1. Separate Integrity Ledger (`integrity_ledger.csv`)
+- All cryptographic hash chaining occurs in a dedicated ledger file, **not** inside the operational liberty or visitor logs.
+- Each entry in the ledger contains:
+  - `PreviousHash` — cryptographic hash of the prior entry in the chain.
+  - `RowHash` — hash of the current log row’s data + the `PreviousHash`.
+- This creates a verifiable chain: altering any historical row will cause all subsequent `RowHash` values to become invalid.
+- Because the hashes live in a separate file, the main operational logs remain clean and easy for humans to read and print.
+
+### 2. Daily File-Level Hashing
+- At the end of each day, the previous day’s liberty log is backed up.
+- A SHA-256 hash of the backup file is created and stored alongside it.
+- These file hashes allow verification that a backup has not been altered since it was created.
+
+### 3. Export Process & Chain of Custody
+- When logs are exported via the Admin Menu, the system generates:
+  - Filtered backup files + their hash files.
+  - Human-readable PDF reports of the regular logs for the selected date range.
+  - A dedicated **Chain of Custody PDF** containing:
+    - Export metadata and date range.
+    - A formal certification statement.
+    - Signature blocks for the exporter (name, rank, EDIPI, signature, date/time) and an optional witness.
+- The integrity ledger (or relevant portions) can be included in the export for independent verification of the hash chain.
+
+### 4. Hash Algorithm
+- SHA-256 is used for all hashing (both file-level backups and the row-level chain in the integrity ledger).
+- This is a widely accepted, collision-resistant cryptographic hash function.
+
+**What these controls can detect**:
+- Retroactive alteration of historical log entries after they were written.
+- Corruption or truncation of backup files.
+
+**What these controls cannot prevent**:
+- False data entered at the time of creation (mitigated by duty watch + physical logbook).
+- Tampering by someone with physical access during their watch who also controls the ledger at the moment of entry.
+
+These controls, when combined with constant duty supervision and the parallel physical OOD logbook, are intended to provide a reasonable level of assurance regarding the integrity of the records for internal unit purposes and potential evidentiary use.
+
+## Preparing Evidence for Court or Subpoena (Single Day)
+
+If a specific day’s records are subpoenaed, the following package should be prepared:
+
+1. **The original log files** for that date (or the daily backup + verified hash).
+2. **The corresponding entries** from `integrity_ledger.csv` for that date.
+3. **Proof of hash chain integrity** for the requested day (run the Backup Verifier and export/save the verification report).
+4. **The daily backup** (.bak) and its `.sha256` hash file.
+5. **The Chain of Custody PDF** generated during any export of that data.
+6. **A copy of the physical OOD logbook** entry for the same date.
+7. **Testimony** from the duty personnel who were on watch during the relevant period.
+8. **Export metadata** (who performed the export, when, and under what authority).
+
+The combination of cryptographic controls (hash chain + file hashes), constant duty supervision, and the contemporaneous physical logbook is intended to support the reliability of the digital record.
+
+## Tools & Utilities
+
+The `tools/` folder contains administrative and testing utilities:
+
+- `visitor_signin.py` — Standalone Visitor Check-In/Out tool (launched from the main kiosk).
+- `backup_verifier.py` — Verifies both file-level SHA-256 hashes and the row-level hash chain stored in the integrity ledger.
+- `create_test_data.py` — Generates realistic multi-day test data, including properly chained entries in the separate integrity ledger (useful for training and validation).
 
 🔧 Troubleshooting
 

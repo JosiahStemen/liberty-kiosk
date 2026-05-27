@@ -19,6 +19,9 @@ from tkinter import messagebox, simpledialog
 from pathlib import Path
 import sys
 
+# Add lib folder to path (so we can run this script from tools/ or root)
+sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+
 # ====================== SHARED LOGIC ======================
 from liberty_common import (
     USMC_RED,
@@ -303,7 +306,7 @@ class VisitorSignInApp(tk.Tk):
         self.visitor_frame.pack(fill="x", pady=5)
         self.visitor_name_var.set("")
         self.building_var.set("")
-        self.room_var.set()
+        self.room_var.set("")
 
     def _save_profile_upgrade(self, raw_id, profile):
         """Minimal upgrade writer for the standalone tool."""
