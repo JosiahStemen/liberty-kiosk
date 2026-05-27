@@ -164,13 +164,15 @@ The system uses a layered approach to detect tampering while preserving human re
 
 ### 3. Export Process & Chain of Custody
 - When logs are exported via the Admin Menu, the system generates:
-  - Filtered backup files + their hash files.
-  - Human-readable PDF reports of the regular logs for the selected date range.
+  - Raw log files (daily_logs and visitor logs) for the selected date range.
+  - Filtered backup files (.bak) and their SHA-256 hash files.
+  - Human-readable PDF reports (daily reports + combined visitor report) for the selected date range.
+  - A cryptographic manifest of all files in the export.
   - A dedicated **Chain of Custody PDF** containing:
     - Export metadata and date range.
     - A formal certification statement.
     - Signature blocks for the exporter (name, rank, EDIPI, signature, date/time) and an optional witness.
-- The integrity ledger (or relevant portions) can be included in the export for independent verification of the hash chain.
+- The full integrity ledger at the time of export is included for independent verification of the hash chain.
 
 ### 4. Hash Algorithm
 - SHA-256 is used for all hashing (both file-level backups and the row-level chain in the integrity ledger).
@@ -190,7 +192,7 @@ These controls, when combined with constant duty supervision and the parallel ph
 
 If a specific day’s records are subpoenaed, the following package should be prepared:
 
-1. **The original log files** for that date (or the daily backup + verified hash).
+1. **The raw log files** for that date (included in the export) or the daily backup + verified hash.
 2. **The corresponding entries** from `integrity_ledger.csv` for that date.
 3. **Proof of hash chain integrity** for the requested day (run the Backup Verifier and export/save the verification report).
 4. **The daily backup** (.bak) and its `.sha256` hash file.
@@ -220,7 +222,7 @@ Forgotten Admin Password: Use your superuser password to reset it instantly.
 📋 Recent Changes
 
 - Admin Menu is now fully scrollable
-- Combined export options into one unified "Export All Logs & Backups to USB"
+- Export includes raw logs, daily backups with hashes, PDF reports, cryptographic manifest, and Chain of Custody documentation.
 - Added dedicated Visitor Check-In/Out system with its own tool
 - Added `kiosk_config.py` and `kiosk_ui.py` for better architecture
 - Removed live status dashboard from main screen

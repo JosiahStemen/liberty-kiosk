@@ -981,14 +981,15 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
     def admin_export_to_usb(self):
         """Export logs for a date range as a court-ready, cryptographically hardened package.
 
-        Current structure (lean, focused on daily use + forensic integrity):
+        Structure:
             LibertyKiosk_Export_YYYY-MM-DD_to_YYYY-MM-DD/
                 ├── Reports/
-                │   └── Daily/                   ← Per-day Liberty + Visitor PDFs (main daily use)
-                │   └── Visitor_Logs_Report.pdf  ← Combined visitor report only
+                │   └── Daily/                   (Liberty and Visitor PDF per day)
+                │   └── Visitor_Logs_Report.pdf  (combined visitor report)
                 └── Full_Integrity_Package/
-                    ├── Evidence/                (ChainOfCustody + MANIFEST + README)
+                    ├── SourceData/              (raw daily_logs and visitor logs CSVs)
                     ├── Backups/                 (.bak + .sha256)
+                    ├── Evidence/                (ChainOfCustody + MANIFEST + README)
                     └── Metadata/                (integrity_ledger + export info)
         """
         if not self.themed_askyesno("⚠️ PII/CUI WARNING",
@@ -1050,22 +1051,27 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         export_folder = usb_path / export_name
         export_folder.mkdir(parents=True, exist_ok=True)
 
-        # === LEAN STORAGE-FRIENDLY STRUCTURE ===
-        # - Reports/ (Daily split PDFs + combined Visitor only) at top — this is what you use 90% of the time.
-        # - Full_Integrity_Package/ contains only the verifiable forensic pieces (.bak + ledger + manifest + CoC).
-        #   Raw SourceData/ is intentionally omitted to save storage.
+        # === EXPORT STRUCTURE ===
+        # - Reports/ (Daily PDFs + combined Visitor report)
+        # - Full_Integrity_Package/
+        #     - SourceData/ (raw logs)
+        #     - Backups/ (.bak + .sha256)
+        #     - Evidence/ (manifest + CoC + README)
+        #     - Metadata/ (ledger + export info)
         reports_dir = export_folder / "Reports"
         reports_daily_dir = reports_dir / "Daily"
         integrity_dir = export_folder / "Full_Integrity_Package"
 
-        evidence_dir = integrity_dir / "Evidence"
-        backups_dir = integrity_dir / "Backups"
-        metadata_dir = integrity_dir / "Metadata"
+        evidence_dir    = integrity_dir / "Evidence"
+        source_data_dir = integrity_dir / "SourceData"
+        backups_dir     = integrity_dir / "Backups"
+        metadata_dir    = integrity_dir / "Metadata"
 
         reports_dir.mkdir(parents=True, exist_ok=True)
         reports_daily_dir.mkdir(parents=True, exist_ok=True)
         integrity_dir.mkdir(parents=True, exist_ok=True)
         evidence_dir.mkdir(parents=True, exist_ok=True)
+        source_data_dir.mkdir(parents=True, exist_ok=True)
         backups_dir.mkdir(parents=True, exist_ok=True)
         metadata_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1073,8 +1079,6 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
             exported_backup_count = 0
 
             # 1. Copy filtered daily BACKUP .bak + .sha256 files (robust date extraction for .csv.bak)
-            #    (We intentionally do NOT copy raw SourceData/ anymore to save storage space.
-            #     The .bak files + integrity ledger + manifest are sufficient for verification.)
             backups_src = DATA_DIR / "backups"
             if backups_src.exists():
                 for bak_file in backups_src.glob("liberty_log_*.csv.bak"):
@@ -1103,12 +1107,44 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
                     except Exception:
                         continue
 
-            # 2. Generate the easy-to-use DAILY split reports (primary format for 6105s / NJPs)
-            #    Generated from live data at export time (we no longer copy raw SourceData to save space).
-            self._generate_daily_split_reports(None, reports_daily_dir, start_date, end_date, export_all)
+            # 2. Copy the raw source logs (daily_logs + visitor logs) for the selected date range
+            #    These are the actual human-readable records at the time of export.
+            source_files_copied = 0
+            daily_src = DATA_DIR / "daily_logs"
+            visitor_src = VISITOR_LOGS_DIR
 
-            # Generate combined Visitor report only (user does not want combined Liberty weekly PDF or Liberty .txt)
-            self._generate_visitor_logs_report(reports_dir, start_date, end_date, export_all)
+            target_daily = source_data_dir / "daily_logs"
+            target_visitor = source_data_dir / "visitor_logs"
+            target_daily.mkdir(parents=True, exist_ok=True)
+            target_visitor.mkdir(parents=True, exist_ok=True)
+
+            if daily_src.exists():
+                for log_file in sorted(daily_src.glob("liberty_log_*.csv")):
+                    try:
+                        date_str = log_file.stem.split("_")[-1]
+                        file_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+                        if export_all or (start_date <= file_date <= end_date):
+                            shutil.copy2(log_file, target_daily / log_file.name)
+                            source_files_copied += 1
+                    except Exception:
+                        continue
+
+            if visitor_src.exists():
+                for log_file in sorted(visitor_src.glob("visitor_log_*.csv")):
+                    try:
+                        date_str = log_file.stem.split("_")[-1]
+                        file_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+                        if export_all or (start_date <= file_date <= end_date):
+                            shutil.copy2(log_file, target_visitor / log_file.name)
+                            source_files_copied += 1
+                    except Exception:
+                        continue
+
+            # 4. Generate reports from the copied raw source data
+            self._generate_daily_split_reports(source_data_dir, reports_daily_dir, start_date, end_date, export_all)
+
+            # Generate combined Visitor report (no combined Liberty report is created)
+            self._generate_visitor_logs_report(reports_dir, start_date, end_date, export_all, source_base_dir=source_data_dir)
 
             # 3. Copy supporting files into the integrity package
             if INTEGRITY_LEDGER_FILE.exists():
@@ -1124,9 +1160,9 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
                 "export_name": export_name,
                 "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "log_range": range_part,
-                "source_files_copied": 0,   # intentionally omitted to save storage (raw logs no longer exported)
+                "source_files_copied": source_files_copied,
                 "backups_copied": exported_backup_count,
-                "kiosk_export_version": "2.2-no-raw-source"
+                "kiosk_export_version": "2.3-with-raw-source"
             }
             with open(metadata_dir / "export_metadata.json", "w", encoding="utf-8") as f:
                 json.dump(export_meta, f, indent=2)
@@ -1158,9 +1194,9 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
                 f"Log Range: {range_text}\n\n"
                 f"MANIFEST.sha256: {manifest_hash[:16]}...\n\n"
                 f"Layout:\n"
-                f"• Reports/Daily/          ← Daily Liberty + Visitor PDFs (what you use most)\n"
-                f"• Reports/Visitor_Logs_Report.pdf (combined visitor only)\n"
-                f"• Full_Integrity_Package/ ← .bak files + ledger + manifest + CoC\n\n"
+                f"• Reports/Daily/          ← Daily Liberty + Visitor PDFs\n"
+                f"• Reports/Visitor_Logs_Report.pdf (combined visitor)\n"
+                f"• Full_Integrity_Package/ ← SourceData (raw logs) + Backups + Evidence + Metadata\n\n"
                 f"Copy the whole folder to your archive drive.")
 
             self.log_admin_action(
@@ -1748,32 +1784,29 @@ Log Date Range: {range_text}
 Manifest Hash (MANIFEST.sha256): {manifest_hash}
 Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-FOLDER LAYOUT (IMPORTANT)
--------------------------
+FOLDER LAYOUT
+-------------
 Reports/
     - Daily/ folder
-        Contains one clean PDF per day for both Liberty and Visitors
+        One PDF per day for Liberty logs and one PDF per day for Visitor logs
         (e.g. 2026-05-18_Liberty_Report.pdf and 2026-05-18_Visitor_Report.pdf).
-        This is what you will use 90% of the time (6105s, NJPs, etc.).
 
-    - Visitor_Logs_Report.pdf (combined visitor report only — no combined Liberty report is generated)
+    - Visitor_Logs_Report.pdf (combined visitor report for the selected date range)
 
 Full_Integrity_Package/
-    Contains everything needed for a subpoena or court-martial:
-    - Evidence/          (ChainOfCustody.pdf + MANIFEST + detailed README)
-    - Backups/           (.bak + .sha256 daily snapshots)
-    - Metadata/          (integrity ledger + export metadata)
+    - SourceData/
+        Raw daily_logs and visitor logs CSV files for the selected date range.
 
-Note: Raw SourceData/ CSVs are intentionally omitted to keep the package smaller.
-The readable reports + .bak files + ledger are sufficient for verification and legal use.
+    - Backups/
+        .bak files and corresponding .sha256 hash files for the selected date range.
 
-The separation exists because you need fast access to readable reports
-for normal work (Reports/Daily/), but must still preserve the full forensic package
-for legal proceedings.
+    - Evidence/
+        ChainOfCustody.pdf, MANIFEST.json, MANIFEST.sha256, and this README.
 
-NOTE: The top-level folder name uses the log dates (not creation date)
-so you can quickly find the correct export on archive drives by searching
-for the date you need.
+    - Metadata/
+        integrity_ledger.csv (full ledger at time of export) and export_metadata.json.
+
+The top-level folder name is based on the log date range being exported.
 
 CONTENTS OF THIS PACKAGE
 ------------------------
@@ -1784,21 +1817,22 @@ CONTENTS OF THIS PACKAGE
         2. Compare it to the value in MANIFEST.sha256
         3. (Advanced) Recompute hashes of individual files and compare to MANIFEST.json
 
+- SourceData/
+    Raw CSV files of the daily liberty logs and visitor logs for the selected date range.
+
 - Backups/
-    Daily .bak snapshot files + their original .sha256 sidecars created by the kiosk's
-    automated backup process. These were hashed at ~02:00 the morning after the logs were written.
-    (Raw SourceData/ CSVs are intentionally omitted to save storage space.)
+    Daily .bak snapshot files and their .sha256 hash sidecars for the selected date range.
 
 - Reports/
-    - ChainOfCustody.pdf (this is the signed document)
-    - Daily/ folder with one PDF per day (Liberty + Visitor) — this is what you use most of the time
-    - Visitor_Logs_Report.pdf (combined visitor report only)
+    - ChainOfCustody.pdf
+    - Daily/ folder containing one Liberty PDF and one Visitor PDF per day in the range
+    - Visitor_Logs_Report.pdf (combined visitor report for the range)
 
 - Metadata/
-    - integrity_ledger.csv : The full row-level hash chain ledger
-    - export_metadata.json : Technical details about this export
+    - integrity_ledger.csv (full ledger at time of export)
+    - export_metadata.json
 
-- profiles.csv + admin.hash : Snapshot of user data at export time
+- profiles.csv and admin.hash (at time of export)
 
 HOW TO VERIFY THIS PACKAGE (FORENSIC / COURT USE)
 -------------------------------------------------
@@ -1820,14 +1854,14 @@ HOW TO VERIFY THIS PACKAGE (FORENSIC / COURT USE)
 
 IMPORTANT NOTES FOR LEGAL USE
 -----------------------------
-- This package focuses on the .bak snapshots + cryptographic ledger + manifest for tamper evidence.
-- Raw daily CSVs are not included (to save space) — the readable reports + .bak files are sufficient.
-- The strength of this evidence comes from:
-    * Cryptographic hashing (file-level + row-level chain in the ledger)
-    * The air-gapped nature of the kiosk
-    * Constant physical supervision by duty personnel
-    * The parallel paper OOD logbook
-- The .bak files are daily snapshots created the next morning.
+This export package contains:
+- The raw log files for the selected date range
+- Daily backup files (.bak) and their SHA-256 hashes
+- The integrity ledger at the time of export
+- A cryptographic manifest of all files in the package
+- A signed Chain of Custody document
+
+The .bak files are daily snapshots created by the kiosk the morning after the logs were written.
 
 QUESTIONS?
 ----------
