@@ -287,7 +287,7 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         win = tk.Toplevel(self)
         win.title("Update Marine Profile")
         win.configure(bg=BG_COLOR)
-        win.geometry("700x600")
+        win.geometry("700x650")
 
         tk.Label(win, text=f"Editing: {profile['Full_Name']}", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 16, "bold")).pack(pady=10)
 
@@ -302,13 +302,44 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
             tk.Label(win, text=label + ":", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 12)).pack(anchor="w", padx=50, pady=(10,0))
             tk.Entry(win, textvariable=var, font=("Helvetica", 14), width=40).pack(padx=50, pady=5)
 
+        # === NEW: Support replacing the Marine's CAC (new Raw_ID / 99-char barcode) ===
+        tk.Label(win, text="Current CAC Raw ID (99-char barcode):", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 12)).pack(anchor="w", padx=50, pady=(12,0))
+        tk.Label(win, text=raw_id, fg="#CCCCCC", bg=BG_COLOR, font=("Consolas", 9), wraplength=620).pack(anchor="w", padx=50)
+
+        tk.Label(win, text="New CAC Raw ID (scan the replacement CAC after clicking this field):", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 12)).pack(anchor="w", padx=50, pady=(8,0))
+        new_raw_var = tk.StringVar(value=raw_id)
+        tk.Entry(win, textvariable=new_raw_var, font=("Consolas", 11), width=85).pack(padx=50, pady=3)
+        tk.Label(win, text="Tip: Click in the field above, then scan the FRONT of the new CAC card. Leave unchanged if not replacing the CAC.", fg="#888888", bg=BG_COLOR, font=("Helvetica", 10)).pack(anchor="w", padx=50)
+
         def save():
+            new_raw = new_raw_var.get().strip()
+            if not new_raw or len(new_raw) != 99:
+                self.themed_showerror("Error", "New CAC Raw ID must be exactly 99 characters (full front barcode scan).")
+                return
+            if new_raw != raw_id and new_raw in self.profiles:
+                self.themed_showerror("Error", "That CAC barcode is already registered to another profile.")
+                return
+
             formatted_phone = format_phone(phone_var.get())
-            self.save_profile(raw_id, profile["EDIPI"], rank_var.get().strip(), last_var.get().strip(),
+
+            use_raw = raw_id
+            if new_raw != raw_id:
+                # Re-key the profile under the new CAC Raw_ID (old CAC will no longer match this Marine)
+                if raw_id in self.profiles:
+                    profile_data = self.profiles.pop(raw_id)
+                    profile_data["Raw_ID"] = new_raw
+                    self.profiles[new_raw] = profile_data
+                use_raw = new_raw
+
+            self.save_profile(use_raw, profile["EDIPI"], rank_var.get().strip(), last_var.get().strip(),
                               first_var.get().strip(), mi_var.get().strip(), formatted_phone,
                               profile["PIN_hash"])
             self.profiles = load_profiles()
-            self.themed_showinfo("Success", "Profile updated successfully!")
+            self.log_admin_action("UPDATE_PROFILE", f"EDIPI {profile['EDIPI']}" + (" (CAC replaced)" if new_raw != raw_id else ""), actor="admin")
+            msg = "Profile updated successfully!"
+            if new_raw != raw_id:
+                msg = "Profile and CAC updated successfully! The old CAC will no longer identify this Marine."
+            self.themed_showinfo("Success", msg)
             win.destroy()
 
         tk.Button(win, text="SAVE CHANGES", bg=USMC_GOLD, fg=USMC_DARK, font=("Helvetica", 14, "bold"), command=save).pack(pady=20)
