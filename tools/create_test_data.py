@@ -17,7 +17,7 @@ print(f"Test data will be written to project root:\n  {DATA_DIR}\n")
 
 # ==================== CONFIG ====================
 NUM_DAYS = 10
-ENTRIES_PER_DAY = 60
+ENTRIES_PER_DAY = 15
 VISITOR_ENTRIES_PER_DAY = 8          # Fewer visitors than liberty checkouts
 LOGS_DIR = DATA_DIR / "daily_logs"
 VISITOR_LOGS_DIR = DATA_DIR / "visitor logs"
@@ -74,6 +74,7 @@ for i in range(NUM_DAYS):
     # === LIBERTY LOGS ===
     liberty_rows = []
     previous_liberty_hash = ""
+    open_count_for_current = 0
 
     for _ in range(ENTRIES_PER_DAY):
         rank = random.choice(RANKS)
@@ -100,9 +101,19 @@ for i in range(NUM_DAYS):
         minute_out = random.randint(0, 59)
         time_out = f"{log_date} {hour_out:02d}:{minute_out:02d}:00"
         
-        if random.random() > 0.55:
-            time_in = ""
+        is_current_day = (i == 0)
+        if is_current_day:
+            # For the current day: only leave TWO people not signed back in.
+            # Everyone else must be signed in.
+            if open_count_for_current < 2:
+                time_in = ""
+                open_count_for_current += 1
+            else:
+                hour_in = random.randint(1, 6)
+                minute_in = random.randint(0, 59)
+                time_in = f"{log_date + datetime.timedelta(days=1 if hour_in < 8 else 0)} {hour_in:02d}:{minute_in:02d}:00"
         else:
+            # Previous days: everyone is signed back in
             hour_in = random.randint(1, 6)
             minute_in = random.randint(0, 59)
             time_in = f"{log_date + datetime.timedelta(days=1 if hour_in < 8 else 0)} {hour_in:02d}:{minute_in:02d}:00"
