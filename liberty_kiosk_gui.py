@@ -451,9 +451,11 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
 
             if barcode in self.profiles:
                 self.current_user = self.profiles[barcode].copy()
+                print(f"[DEBUG] process_scan: existing profile, barcode={barcode[:20]}..., current edipi={self.current_user.get('EDIPI')}")
                 self.handle_check_in_out()
             else:
                 self.current_user = {"Raw_ID": barcode, "EDIPI": None, "Rank": parsed["Rank"], "Full_Name": parsed["Full_Name"], **parsed}
+                print(f"[DEBUG] process_scan: new, parsed rank={parsed.get('Rank')}, full={parsed.get('Full_Name')}")
                 self.show_registration_screen(parsed)
 
         elif self.is_zyn_code(barcode):
@@ -521,9 +523,11 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
                 # writes the proper name into the daily log CSV (so "View Marines Out" shows it).
                 if parsed["Raw_ID"] in self.profiles:
                     self.current_user = self.profiles[parsed["Raw_ID"]].copy()
+                    print(f"[DEBUG] reg: current_user set from profile, edipi={self.current_user.get('EDIPI')}, full_name={self.current_user.get('Full_Name')}")
                 else:
                     self.current_user["EDIPI"] = edipi
                     self.current_user["Raw_ID"] = parsed["Raw_ID"]
+                    print(f"[DEBUG] reg: current_user patched, edipi={self.current_user.get('EDIPI')}")
 
                 reg_win.destroy()
                 self.show_message(f"✅ {first_var.get()} {last_var.get()} registered! Oorah!", USMC_GOLD, 6)
@@ -536,6 +540,7 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
     def handle_check_in_out(self):
         raw_id = self.current_user.get("Raw_ID")
         profile = self.profiles.get(raw_id)
+        print(f"[DEBUG] handle: raw_id={raw_id}, profile_found={profile is not None}, current_user_edipi={self.current_user.get('EDIPI')}")
         if not profile:
             self.show_message("❌ Profile not found. Please register again.", USMC_RED)
             self.after(2000, self.build_main_screen)
@@ -600,6 +605,7 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
                     break
                 self.themed_showerror("Required Field", "Destination cannot be blank.")
 
+            print(f"[DEBUG] about to call log_check_out, group={len(group)}, profile_edipi={profile.get('EDIPI')}, dest={destination}")
             self.log_check_out(group, profile, destination)
             self.show_message(f"✅ Group of {len(group)} checked OUT", USMC_GOLD, 6)
 
@@ -655,6 +661,7 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         """Write checkout entries to today's liberty log (clean columns only).
         Hash chain is recorded separately in the integrity ledger.
         """
+        print(f"[DEBUG] log_check_out called: group len={len(group_members)}, sponsor_edipi={sponsor_profile.get('EDIPI')}, dest={destination}")
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_file = self.get_log_file()
 
@@ -662,6 +669,7 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
         file_exists = log_file.exists()
+        print(f"[DEBUG] log file: {log_file}, exists before write: {file_exists}")
 
         # Clean fieldnames (no hash columns in the human-readable CSV)
         fieldnames = [
@@ -725,7 +733,9 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
 
                     writer.writerow(row)
                     previous_hash = row_hash
+                    print(f"[DEBUG] wrote row for edipi={member_edipi}, name={row.get('Name')}")
 
+            print(f"[DEBUG] log_check_out completed successfully, wrote {len(group_members)} rows")
             return True
         except Exception as e:
             print(f"[LOG_CHECK_OUT ERROR] Failed to write log: {e}")
