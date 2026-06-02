@@ -91,9 +91,13 @@ for i in range(NUM_DAYS):
             buddy_last = random.choice(LAST_NAMES)
             buddy_name = f"{buddy_last}, {buddy_first}"
             buddy_edipi = f"{random.randint(1000000000, 9999999999)}"
+            buddy_last_name = buddy_last
+            buddy_first_name = buddy_first
         else:
             buddy_name = "Self"
             buddy_edipi = ""
+            buddy_last_name = ""
+            buddy_first_name = ""
 
         destination = random.choice(DESTINATIONS)
         
@@ -126,6 +130,8 @@ for i in range(NUM_DAYS):
             "First_Name": first_name,
             "Buddy_Name": buddy_name,
             "Buddy_EDIPI": buddy_edipi,
+            "Buddy_Last_Name": buddy_last_name,
+            "Buddy_First_Name": buddy_first_name,
             "Destination": destination,
             "Time_out": time_out,
             "Time_in": time_in
@@ -144,7 +150,7 @@ for i in range(NUM_DAYS):
         # Clean row for the actual log (no hash columns)
         liberty_rows.append([
             rank, name, edipi, last_name, first_name,
-            buddy_name, buddy_edipi,
+            buddy_name, buddy_edipi, buddy_last_name, buddy_first_name,
             destination, time_out, time_in
         ])
 
@@ -155,7 +161,7 @@ for i in range(NUM_DAYS):
         writer = csv.writer(f)
         writer.writerow([
             "Rank", "Name", "EDIPI", "Last_Name", "First_Name",
-            "Buddy_Name", "Buddy_EDIPI",
+            "Buddy_Name", "Buddy_EDIPI", "Buddy_Last_Name", "Buddy_First_Name",
             "Destination", "Time_out", "Time_in"
         ])
         writer.writerows(liberty_rows)
