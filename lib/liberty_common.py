@@ -149,25 +149,60 @@ def parse_cac_barcode(barcode: str) -> dict:
     """
     Parse a CAC barcode (front scan, keyboard wedge emulation).
     Returns a dict with Rank, Name fields, EDIPI, etc.
-    This is intentionally lenient — the main kiosk and visitor tool
-    both rely on it.
+
+    Solid multi-strategy parser:
+    - Rank via case-insensitive substring on known list.
+    - Name: tries original pattern, no-MI pattern, comma/dot separated LAST,FIRST[.MI],
+      and word fallback. Handles missing middle initial, ALL CAPS, Title Case, etc.
+    - Never crashes; falls back to UNKNOWN fields (user corrects in registration UI).
+    The 99-char Raw_ID is always the reliable per-card key; the parsed name is best-effort
+    convenience for first-time registration.
     """
     rank = "UNKNOWN"
     first = "UNKNOWN"
     last = "UNKNOWN"
     mi = ""
 
+    # Rank: robust case-insensitive
     rank_words = ["SGT", "CPL", "LCPL", "PFC", "PVT", "SSGT", "GYSGT", "MSGT", "MGYSGT", "SGTMAJ"]
+    upper_bar = barcode.upper()
     for word in rank_words:
-        if word in barcode:
+        if word in upper_bar:
             rank = word
             break
 
-    name_match = re.search(r'([A-Z][a-z]+)\s+([A-Z])([A-Z][a-z]+)', barcode)
-    if name_match:
-        first = name_match.group(1)
-        mi = name_match.group(2)
-        last = name_match.group(3)
+    # Name strategies (first successful non-UNKNOWN wins)
+    # 1. Original Title-Case with MI (may have glued or spaced)
+    m = re.search(r'([A-Z][a-z]+)\s+([A-Z])([A-Z][a-z]+)', barcode)
+    if m:
+        first = m.group(1)
+        mi = m.group(2)
+        last = m.group(3)
+    else:
+        # 2. Title Case without MI
+        m = re.search(r'([A-Z][a-z]+)\s+([A-Z][a-z]+)', barcode)
+        if m:
+            first = m.group(1)
+            last = m.group(2)
+            mi = ""
+        else:
+            # 3. Comma / dot / space separated (LAST, FIRST or LAST.FIRST.MI etc.)
+            m = re.search(r'([A-Za-z]+)[,\.\s]+([A-Za-z]+)(?:[,\.\s]+([A-Za-z]))?', barcode)
+            if m:
+                last = m.group(1).strip().title()
+                first = m.group(2).strip().title()
+                mi = (m.group(3) or "").strip().upper()[:1]
+            else:
+                # 4. Last resort: collect capitalized words and assign heuristically
+                words = re.findall(r'([A-Z][A-Za-z]+)', barcode)
+                if len(words) >= 2:
+                    # Heuristic for many barcode formats: first word-ish is last name
+                    last = words[0].title()
+                    first = words[1].title()
+                    mi = ""
+                    if len(last) < 2 and len(words) > 2:
+                        last = words[-1].title()
+                        first = words[-2].title()
 
     full_name = f"{last}, {first}"
     if mi:
