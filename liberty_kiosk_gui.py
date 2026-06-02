@@ -484,8 +484,15 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
                                   formatted_phone, pin_hash)
 
                 self.profiles = load_profiles()
-                self.current_user["EDIPI"] = edipi
-                self.current_user["Raw_ID"] = parsed["Raw_ID"]
+                # Refresh current_user *from the saved profile* (which now has the user-corrected
+                # Last/First/Middle names instead of the original parsed UNKNOWNs). This ensures
+                # that handle_check_in_out -> group = [self.current_user.copy()] -> log_check_out
+                # writes the proper name into the daily log CSV (so "View Marines Out" shows it).
+                if parsed["Raw_ID"] in self.profiles:
+                    self.current_user = self.profiles[parsed["Raw_ID"]].copy()
+                else:
+                    self.current_user["EDIPI"] = edipi
+                    self.current_user["Raw_ID"] = parsed["Raw_ID"]
 
                 reg_win.destroy()
                 self.show_message(f"✅ {first_var.get()} {last_var.get()} registered! Oorah!", USMC_GOLD, 6)
