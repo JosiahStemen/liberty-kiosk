@@ -405,8 +405,6 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         footer = tk.Frame(self, bg=BG_COLOR)
         footer.pack(side="bottom", fill="x", pady=20, padx=30)
 
-        tk.Label(footer, text="Scanner ready - FRONT of CAC only", fg="#666666", bg=BG_COLOR, font=("Helvetica", 12)).pack(side="left")
-
         # Left side - Visitor related buttons (gold to match other buttons)
         tk.Button(footer, text="VIEW VISITOR LIST", bg=USMC_GOLD, fg=USMC_DARK,
                   font=("Helvetica", 11, "bold"), width=18, height=1,
