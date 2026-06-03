@@ -476,10 +476,13 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         tk.Label(reg_win, text="🆕 FIRST-TIME REGISTRATION", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 24, "bold")).pack(pady=20)
         tk.Label(reg_win, text=f"Detected: {parsed['Rank']} {parsed['Full_Name']}", fg="white", bg=BG_COLOR, font=("Helvetica", 18)).pack(pady=10)
 
+        rank_var = tk.StringVar(value=parsed["Rank"])
         last_var = tk.StringVar(value=parsed["Last_Name"])
         first_var = tk.StringVar(value=parsed["First_Name"])
         mi_var = tk.StringVar(value=parsed["Middle_Initial"])
 
+        tk.Label(reg_win, text="Rank:", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 14)).pack(anchor="w", padx=50)
+        tk.Entry(reg_win, textvariable=rank_var, font=("Helvetica", 16), width=40).pack(pady=5)
         tk.Label(reg_win, text="Last Name:", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 14)).pack(anchor="w", padx=50)
         tk.Entry(reg_win, textvariable=last_var, font=("Helvetica", 16), width=40).pack(pady=5)
         tk.Label(reg_win, text="First Name:", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 14)).pack(anchor="w", padx=50)
@@ -512,7 +515,7 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
 
                 pin_hash = hash_secret(pin)
                 formatted_phone = format_phone(phone_var.get())
-                self.save_profile(parsed["Raw_ID"], edipi, parsed["Rank"], last_var.get().strip(),
+                self.save_profile(parsed["Raw_ID"], edipi, rank_var.get().strip(), last_var.get().strip(),
                                   first_var.get().strip(), mi_var.get().strip(),
                                   formatted_phone, pin_hash)
 
