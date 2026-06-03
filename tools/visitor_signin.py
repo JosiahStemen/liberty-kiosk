@@ -39,7 +39,11 @@ from liberty_common import (
     find_profile_by_edipi,
     get_open_visitors_for_today,
     checkout_visitor,
+    get_today_visitor_log_filename,
+    VISITOR_LOG_HEADERS,
 )
+
+from kiosk_config import ADMIN_HASH_FILE, SUPERUSER_HASH_FILE
 
 # ====================== TOP-LEVEL FOCUS BEHAVIOR ======================
 # Same trick used by backup_verifier.py so the tool comes to the front
@@ -157,6 +161,10 @@ class VisitorSignInApp(tk.Tk):
         tk.Button(self.checkout_frame, text="CHECK OUT SELECTED VISITOR",
                   bg="#dc3545", fg="white", font=("Helvetica", 14, "bold"), height=2,
                   command=self.perform_visitor_checkout).pack(fill="x", pady=8)
+
+        tk.Button(self.checkout_frame, text="FORCE CHECK OUT SELECTED VISITOR",
+                  bg="#8B0000", fg="white", font=("Helvetica", 14, "bold"), height=2,
+                  command=self.perform_force_visitor_checkout).pack(fill="x", pady=8)
 
         self.checkout_frame.pack(fill="both", expand=True, pady=5)
         self.checkout_frame.pack_forget()
@@ -481,6 +489,121 @@ class VisitorSignInApp(tk.Tk):
                 self.refresh_visitor_list()
             else:
                 self.themed_showerror("Failed", "Could not update the record. Please try again.")
+
+    def verify_admin_password(self):
+        """Standalone admin password verify for force actions in visitor tool.
+        Mirrors the logic in main GUI.
+        """
+        self.is_superuser = False
+        for _ in range(3):
+            pwd = self.themed_askstring("Admin Login", "Enter Admin Password:", show='*')
+            if not pwd:
+                return False
+
+            # Check normal admin password
+            try:
+                admin_stored = ADMIN_HASH_FILE.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                admin_stored = ""
+            valid, needs_upgrade = verify_secret(pwd, admin_stored)
+            if valid:
+                if needs_upgrade:
+                    try:
+                        ADMIN_HASH_FILE.write_text(hash_secret(pwd), encoding="utf-8")
+                    except Exception as e:
+                        print(f"[ADMIN HASH UPGRADE ERROR] {e}")
+                return True
+
+            # Check superuser password
+            try:
+                su_stored = Path(SUPERUSER_HASH_FILE).read_text(encoding="utf-8")
+            except FileNotFoundError:
+                su_stored = ""
+            su_valid, su_upgrade = verify_secret(pwd, su_stored)
+            if su_valid:
+                self.is_superuser = True
+                if su_upgrade:
+                    try:
+                        Path(SUPERUSER_HASH_FILE).write_text(hash_secret(pwd), encoding="utf-8")
+                    except Exception as e:
+                        print(f"[SUPERUSER HASH UPGRADE ERROR] {e}")
+                return True
+
+            self.themed_showerror("Error", "Incorrect password")
+        return False
+
+    def perform_force_visitor_checkout(self):
+        """Force check out selected visitor (requires admin password + reason)."""
+        if not self.verify_admin_password():
+            return
+
+        selection = self.visitor_listbox.curselection()
+        if not selection:
+            self.themed_showerror("Select Visitor", "Please select a visitor from the list.")
+            return
+
+        index = selection[0]
+        if not hasattr(self, "_current_open_visitors") or index >= len(self._current_open_visitors):
+            messagebox.showerror("Error", "Could not find visitor data.")
+            return
+
+        visitor = self._current_open_visitors[index]
+        ts = visitor.get("Timestamp", "")
+        host_edipi = visitor.get("Host_EDIPI", "")
+        visitor_name = visitor.get("Visitor_Name", "")
+
+        if not ts or not visitor_name:
+            self.themed_showerror("Error", "Invalid visitor record.")
+            return
+
+        reason = self.themed_askstring("Force Checkout Reason",
+                                       "Enter reason for this FORCE check out\n(e.g. host left without scanning):")
+        if not reason or not reason.strip():
+            self.themed_showerror("Error", "A reason is required for force check-out.")
+            return
+        reason = reason.strip()
+
+        confirm_msg = (f"FORCE CHECK OUT {visitor_name} (hosted by {visitor.get('Host_Rank')} {visitor.get('Host_Name')}) ?\n\n"
+                       f"Reason: {reason}\n\n"
+                       "This will mark as checked out with force note.")
+        if not self.themed_askyesno("CONFIRM FORCE CHECKOUT", confirm_msg):
+            return
+
+        # Direct force update on visitor log (bypass normal checkout_visitor if needed, but use similar)
+        log_file = get_today_visitor_log_filename()
+        if not log_file.exists():
+            self.themed_showerror("Error", "No visitor log for today.")
+            return
+
+        with open(log_file, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames or VISITOR_LOG_HEADERS
+            rows = list(reader)
+
+        updated = False
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for row in rows:
+            if (row.get("Timestamp") == ts and
+                str(row.get("Host_EDIPI", "")).strip() == str(host_edipi).strip() and
+                row.get("Visitor_Name", "").strip().lower() == visitor_name.strip().lower() and
+                not row.get("Time_Out")):
+                row["Time_Out"] = now_str
+                # Append force note to Room (keeps data parseable)
+                orig_room = row.get("Room", "")
+                row["Room"] = f"{orig_room} [FORCE CHECKOUT: {reason}]".strip() if orig_room else f"[FORCE CHECKOUT: {reason}]"
+                updated = True
+                break
+
+        if updated:
+            with open(log_file, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+            self.themed_showinfo("Force Checked Out", f"{visitor_name} has been FORCE checked out.\nReason: {reason}")
+            self.refresh_visitor_list()
+        else:
+            self.themed_showerror("Failed", "Could not find matching open visitor record to force checkout.")
 
 
 if __name__ == "__main__":
