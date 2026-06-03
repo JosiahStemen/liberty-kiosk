@@ -277,12 +277,14 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         tk.Button(win, text="Close", bg=USMC_GOLD, fg=USMC_DARK, command=win.destroy).pack(pady=10)
     
     def admin_update_profile(self):
-        search = self.themed_askstring("Update Profile", "Enter Name or EDIPI to search:")
-        if not search: return
-        raw_id, profile = self.find_profile_by_search(search)
+        edipi = self.themed_askstring("Update Profile", "Enter EDIPI to search:")
+        if not edipi: return
+        edipi = edipi.strip()
+        profile = find_profile_by_edipi(edipi)
         if not profile:
             self.themed_showerror("Not Found", "No matching Marine found.")
             return
+        raw_id = profile.get("Raw_ID", edipi)
 
         win = tk.Toplevel(self)
         win.title("Update Marine Profile")
