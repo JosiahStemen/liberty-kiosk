@@ -166,7 +166,7 @@ class VisitorSignInApp(tk.Tk):
         tk.Label(self.checkout_frame, text="Visitors currently signed in (no checkout time yet):",
                  fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 13, "bold")).pack(anchor="w", pady=5)
 
-        self.visitor_listbox = tk.Listbox(self.checkout_frame, font=("Consolas", 12), height=6,
+        self.visitor_listbox = tk.Listbox(self.checkout_frame, font=("Consolas", 12), height=5,
                                           bg="#002b4d", fg="white", selectbackground=USMC_GOLD)
         self.visitor_listbox.pack(fill="both", expand=True, pady=5)
 
@@ -434,6 +434,7 @@ class VisitorSignInApp(tk.Tk):
         self.visitor_frame.pack_forget()
         self.scan_frame.pack_forget()
 
+        self.geometry("720x720")  # temporarily taller window so list + bottom buttons are fully visible
         self.checkout_frame.pack(fill="both", expand=True, pady=5)
 
         self.status_label.config(
