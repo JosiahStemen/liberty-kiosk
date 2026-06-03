@@ -151,20 +151,24 @@ class VisitorSignInApp(tk.Tk):
         # ====================== CHECKOUT VISITOR UI ======================
         self.checkout_frame = tk.Frame(self.content, bg=BG_COLOR)
 
+        # Pack buttons at bottom first (so they are always visible below the list)
+        btns = tk.Frame(self.checkout_frame, bg=BG_COLOR)
+        btns.pack(side="bottom", fill="x", pady=5)
+
+        tk.Button(btns, text="CHECK OUT SELECTED VISITOR",
+                  bg="#dc3545", fg="white", font=("Helvetica", 14, "bold"), height=2,
+                  command=self.perform_visitor_checkout).pack(fill="x", pady=4)
+
+        tk.Button(btns, text="FORCE CHECK OUT SELECTED VISITOR",
+                  bg="#8B0000", fg="white", font=("Helvetica", 14, "bold"), height=2,
+                  command=self.perform_force_visitor_checkout).pack(fill="x", pady=4)
+
         tk.Label(self.checkout_frame, text="Visitors currently signed in (no checkout time yet):",
                  fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 13, "bold")).pack(anchor="w", pady=5)
 
-        self.visitor_listbox = tk.Listbox(self.checkout_frame, font=("Consolas", 12), height=8,
+        self.visitor_listbox = tk.Listbox(self.checkout_frame, font=("Consolas", 12), height=6,
                                           bg="#002b4d", fg="white", selectbackground=USMC_GOLD)
         self.visitor_listbox.pack(fill="both", expand=True, pady=5)
-
-        tk.Button(self.checkout_frame, text="CHECK OUT SELECTED VISITOR",
-                  bg="#dc3545", fg="white", font=("Helvetica", 14, "bold"), height=2,
-                  command=self.perform_visitor_checkout).pack(fill="x", pady=8)
-
-        tk.Button(self.checkout_frame, text="FORCE CHECK OUT SELECTED VISITOR",
-                  bg="#8B0000", fg="white", font=("Helvetica", 14, "bold"), height=2,
-                  command=self.perform_force_visitor_checkout).pack(fill="x", pady=8)
 
         self.checkout_frame.pack(fill="both", expand=True, pady=5)
         self.checkout_frame.pack_forget()
