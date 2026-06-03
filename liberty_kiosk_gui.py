@@ -1019,6 +1019,77 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
             parent_win.destroy()
             self.admin_view_out()  # refresh the list
 
+    def force_check_out_visitor(self, row, parent_win=None):
+        """Force check-out of a visitor from the View Visitors list (analogous to force check-in for marines).
+        Requires admin password + reason, updates the day's visitor log, appends force note to Room.
+        """
+        if not self.verify_admin_password():
+            return
+
+        ts = row.get("Timestamp", "")
+        host_edipi = row.get("Host_EDIPI", "")
+        visitor_name = row.get("Visitor_Name", "")
+
+        if not ts or not visitor_name:
+            self.themed_showerror("Error", "Invalid visitor record.")
+            return
+
+        reason = self.themed_askstring("Force Checkout Reason",
+                                       "Enter reason for this FORCE check out\n(e.g. host left without scanning):")
+        if not reason or not reason.strip():
+            self.themed_showerror("Error", "A reason is required for force check-out.")
+            return
+        reason = reason.strip()
+
+        confirm_msg = (f"Are you sure you want to FORCE CHECK-OUT\n"
+                       f"{visitor_name} (hosted by {row.get('Host_Rank','')} {row.get('Host_Name','')}) ?\n\n"
+                       f"Reason: {reason}\n\n"
+                       "This action will mark the visitor record accordingly.")
+        if not self.themed_askyesno("CONFIRM FORCE CHECK-OUT", confirm_msg):
+            return
+
+        # Update today's visitor log
+        today = datetime.date.today().isoformat()
+        log_file = DATA_DIR / "visitor logs" / f"visitor_log_{today}.csv"
+        if not log_file.exists():
+            self.themed_showerror("Error", "No visitor log for today.")
+            return
+
+        with open(log_file, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+            rows = list(reader)
+
+        updated = False
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for r in rows:
+            if (r.get("Timestamp") == ts and
+                str(r.get("Host_EDIPI", "")).strip() == str(host_edipi).strip() and
+                r.get("Visitor_Name", "").strip().lower() == visitor_name.strip().lower() and
+                not r.get("Time_Out")):
+                r["Time_Out"] = now_str
+                orig_room = r.get("Room", "")
+                r["Room"] = _csv_safe(f"{orig_room} [FORCE CHECKOUT: {reason}]".strip()) if orig_room else f"[FORCE CHECKOUT: {reason}]"
+                updated = True
+                break
+
+        if not updated:
+            self.themed_showerror("Error", "Could not find matching open visitor record.")
+            return
+
+        with open(log_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        self.log_admin_action("FORCE_CHECKOUT_VISITOR", f"visitor={visitor_name}; host_edipi={host_edipi}; reason={reason}",
+                              actor=("superuser" if getattr(self, 'is_superuser', False) else "admin"))
+        self.themed_showinfo("Success", f"✅ Visitor {visitor_name} has been force checked-out.\nReason: {reason}")
+        if parent_win:
+            parent_win.destroy()
+            self.view_visitor_list()  # refresh the list
+
     def admin_export_to_usb(self):
         """Export logs for a date range as a court-ready, cryptographically hardened package.
 
@@ -2097,6 +2168,14 @@ Contact the unit S-1 or the administrator who performed this export.
                     else:
                         tk.Label(info, text=status_text, fg="#00FF00", bg=bg_color,
                                  font=("Helvetica", 12, "bold")).pack(anchor="w")
+
+                    if is_open:
+                        # Small red Force button for visitors, like liberty force check-in
+                        btn_frame = tk.Frame(row_frame, bg=bg_color)
+                        btn_frame.pack(side="right", padx=12, pady=8)
+                        tk.Button(btn_frame, text="FORCE\nCHECK-OUT", bg="#8B0000", fg="white",
+                                  font=("Helvetica", 9, "bold"), width=12, height=2,
+                                  command=lambda r=row, w=win: self.force_check_out_visitor(r, w)).pack()
 
             except Exception as e:
                 tk.Label(scroll_frame, text=f"Error reading visitor log: {e}", fg=USMC_RED, bg=BG_COLOR,
