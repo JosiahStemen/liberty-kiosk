@@ -55,7 +55,7 @@ class VisitorSignInApp(tk.Tk):
         super().__init__()
         self.title("MARDET-MONTEREY - Visitor Sign-In")
         self.configure(bg=BG_COLOR)
-        self.geometry("720x620")
+        self.geometry("720x720")  # taller default so checkout list + buttons fit without clipping
 
         # Force to front (works even when launched from another Tkinter app)
         self.update_idletasks()
@@ -434,7 +434,7 @@ class VisitorSignInApp(tk.Tk):
         self.visitor_frame.pack_forget()
         self.scan_frame.pack_forget()
 
-        self.geometry("720x720")  # temporarily taller window so list + bottom buttons are fully visible
+        self.geometry("720x720")  # ensure tall enough for list + bottom buttons
         self.checkout_frame.pack(fill="both", expand=True, pady=5)
 
         self.status_label.config(
