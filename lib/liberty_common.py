@@ -163,10 +163,10 @@ def parse_cac_barcode(barcode: str) -> dict:
     last = "UNKNOWN"
     mi = ""
 
-    # Rank: robust case-insensitive
+    # Rank: robust case-insensitive (longest match first to avoid LCPL matching CPL etc.)
     rank_words = ["SGT", "CPL", "LCPL", "PFC", "PVT", "SSGT", "GYSGT", "MSGT", "MGYSGT", "SGTMAJ"]
     upper_bar = barcode.upper()
-    for word in rank_words:
+    for word in sorted(rank_words, key=len, reverse=True):
         if word in upper_bar:
             rank = word
             break
