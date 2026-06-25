@@ -216,59 +216,77 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         # ======================================================================
 
         found = False
-        marine_count = 0
+        group_count = 0
+        grouped_open = self._collect_open_liberty_groups()
 
-        for i in range(7):
-            d = datetime.date.today() - datetime.timedelta(days=i)
-            log_file = DATA_DIR / "daily_logs" / f"liberty_log_{d.isoformat()}.csv"
-            if not log_file.exists():
-                continue
+        for members in grouped_open.values():
+            found = True
+            group_count += 1
+            is_group = len(members) > 1
+            sponsor_row = next((m for m in members if m.get("Buddy_Name", "") == "Self"), members[0])
 
-            with open(log_file, "r", newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    if not row.get("Time_in") or row.get("Time_in").strip() == "":
-                        found = True
-                        marine_count += 1
+            row_frame = tk.Frame(scroll_frame, bg="#001F3F", relief="ridge", bd=2)
+            row_frame.pack(fill="x", pady=6, padx=10)
 
-                        row_frame = tk.Frame(scroll_frame, bg="#001F3F", relief="ridge", bd=2)
-                        row_frame.pack(fill="x", pady=6, padx=10)
+            info = tk.Frame(row_frame, bg="#001F3F")
+            info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
 
-                        info = tk.Frame(row_frame, bg="#001F3F")
-                        info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
+            if is_group:
+                tk.Label(info, text=f"BUDDY GROUP #{group_count} — {len(members)} MARINES",
+                         fg=USMC_GOLD, bg="#001F3F", font=("Helvetica", 12, "bold")).pack(anchor="w")
+                tk.Label(info, text=f"Sponsor: {sponsor_row['Rank']} {sponsor_row['Name']}",
+                         fg="white", bg="#001F3F", font=("Helvetica", 12, "bold")).pack(anchor="w", pady=(4, 0))
+                tk.Label(info, text=f"Destination: {sponsor_row.get('Destination', 'N/A')}", fg="white", bg="#001F3F",
+                         font=("Helvetica", 11)).pack(anchor="w")
+                tk.Label(info, text=f"Time Out: {sponsor_row['Time_out']}", fg="#AAAAAA", bg="#001F3F",
+                         font=("Helvetica", 11)).pack(anchor="w", pady=(0, 6))
 
-                        tk.Label(info, text=f"MARINE #{marine_count}", fg=USMC_GOLD, bg="#001F3F",
-                                 font=("Helvetica", 11, "bold")).pack(anchor="w")
-                        tk.Label(info, text=f"{row['Rank']} {row['Name']}", fg="white", bg="#001F3F",
-                                 font=("Helvetica", 13, "bold")).pack(anchor="w")
-                        tk.Label(info, text=f"EDIPI: {row['EDIPI']}", fg="#AAAAAA", bg="#001F3F",
-                                 font=("Helvetica", 11)).pack(anchor="w")
+                for row in members:
+                    marine_line = tk.Frame(info, bg="#001F3F")
+                    marine_line.pack(fill="x", pady=2)
 
-                        # Look up phone from profiles using the proper EDIPI lookup
-                        phone = "N/A"
-                        prof = find_profile_by_edipi(row.get("EDIPI"))
-                        if prof and prof.get("Phone"):
-                            phone = format_phone(prof["Phone"])   # ensure nice formatting
-                        tk.Label(info, text=f"Phone: {phone}", fg="#AAAAAA", bg="#001F3F",
-                                 font=("Helvetica", 11)).pack(anchor="w")
+                    marine_text = tk.Frame(marine_line, bg="#001F3F")
+                    marine_text.pack(side="left", fill="both", expand=True)
+                    tk.Label(marine_text, text=f"• {row['Rank']} {row['Name']}", fg="white", bg="#001F3F",
+                             font=("Helvetica", 11, "bold")).pack(anchor="w")
+                    tk.Label(marine_text, text=f"  EDIPI: {row.get('EDIPI', 'N/A')}", fg="#AAAAAA", bg="#001F3F",
+                             font=("Helvetica", 10)).pack(anchor="w")
+                    phone = "N/A"
+                    prof = find_profile_by_edipi(row.get("EDIPI"))
+                    if prof and prof.get("Phone"):
+                        phone = format_phone(prof["Phone"])
+                    tk.Label(marine_text, text=f"  Phone: {phone}", fg="#AAAAAA", bg="#001F3F",
+                             font=("Helvetica", 10)).pack(anchor="w")
 
-                        tk.Label(info, text=f"Destination: {row.get('Destination', 'N/A')}", fg="white", bg="#001F3F",
-                                 font=("Helvetica", 11)).pack(anchor="w")
-                        tk.Label(info, text=f"Time Out: {row['Time_out']}", fg="#AAAAAA", bg="#001F3F",
-                                 font=("Helvetica", 11)).pack(anchor="w")
+                    tk.Button(marine_line, text="FORCE\nCHECK-IN", bg="#8B0000", fg="white",
+                              font=("Helvetica", 8, "bold"), width=10, height=2,
+                              command=lambda e=row['EDIPI'], w=win: self.force_check_in_with_password(e, w)).pack(side="right", padx=(8, 0))
+            else:
+                row = members[0]
+                tk.Label(info, text=f"MARINE #{group_count}", fg=USMC_GOLD, bg="#001F3F",
+                         font=("Helvetica", 11, "bold")).pack(anchor="w")
+                tk.Label(info, text=f"{row['Rank']} {row['Name']}", fg="white", bg="#001F3F",
+                         font=("Helvetica", 13, "bold")).pack(anchor="w")
+                tk.Label(info, text=f"EDIPI: {row['EDIPI']}", fg="#AAAAAA", bg="#001F3F",
+                         font=("Helvetica", 11)).pack(anchor="w")
 
-                        buddy_name = row.get("Buddy_Name", "")
-                        if buddy_name and buddy_name != "Self":
-                            buddy_edipi = row.get("Buddy_EDIPI", "")
-                            tk.Label(info, text=f"Buddy → {buddy_name} ({buddy_edipi})", fg=USMC_GOLD, bg="#001F3F",
-                                     font=("Helvetica", 10)).pack(anchor="w")
+                phone = "N/A"
+                prof = find_profile_by_edipi(row.get("EDIPI"))
+                if prof and prof.get("Phone"):
+                    phone = format_phone(prof["Phone"])
+                tk.Label(info, text=f"Phone: {phone}", fg="#AAAAAA", bg="#001F3F",
+                         font=("Helvetica", 11)).pack(anchor="w")
 
-                        # Small red Force button
-                        btn_frame = tk.Frame(row_frame, bg="#001F3F")
-                        btn_frame.pack(side="right", padx=12, pady=8)
-                        tk.Button(btn_frame, text="FORCE\nCHECK-IN", bg="#8B0000", fg="white",
-                                  font=("Helvetica", 9, "bold"), width=12, height=2,
-                                  command=lambda e=row['EDIPI'], w=win: self.force_check_in_with_password(e, w)).pack()
+                tk.Label(info, text=f"Destination: {row.get('Destination', 'N/A')}", fg="white", bg="#001F3F",
+                         font=("Helvetica", 11)).pack(anchor="w")
+                tk.Label(info, text=f"Time Out: {row['Time_out']}", fg="#AAAAAA", bg="#001F3F",
+                         font=("Helvetica", 11)).pack(anchor="w")
+
+                btn_frame = tk.Frame(row_frame, bg="#001F3F")
+                btn_frame.pack(side="right", padx=12, pady=8)
+                tk.Button(btn_frame, text="FORCE\nCHECK-IN", bg="#8B0000", fg="white",
+                          font=("Helvetica", 9, "bold"), width=12, height=2,
+                          command=lambda e=row['EDIPI'], w=win: self.force_check_in_with_password(e, w)).pack()
 
         if not found:
             tk.Label(scroll_frame, text="No Marines currently on liberty.", fg=USMC_GOLD, bg=BG_COLOR,
@@ -462,39 +480,78 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         else:
             self.show_message("❌ Please scan the FRONT of your CAC only", USMC_RED)
 
-    def show_registration_screen(self, parsed):
+    def show_registration_screen(self, parsed, on_complete=None, heading="🆕 FIRST-TIME REGISTRATION", subtitle=None):
         reg_win = tk.Toplevel(self)
         reg_win.title("Register New Marine")
         reg_win.configure(bg=BG_COLOR)
-        reg_win.geometry("900x700")
+        win_h = min(720, reg_win.winfo_screenheight() - 60)
+        reg_win.geometry(f"900x{win_h}")
+        reg_win.minsize(700, 480)
         reg_win.grab_set()
         reg_win.lift()
         reg_win.focus_force()
 
-        tk.Label(reg_win, text="🆕 FIRST-TIME REGISTRATION", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 24, "bold")).pack(pady=20)
-        tk.Label(reg_win, text=f"Detected: {parsed['Rank']} {parsed['Full_Name']}", fg="white", bg=BG_COLOR, font=("Helvetica", 18)).pack(pady=10)
+        header = tk.Frame(reg_win, bg=BG_COLOR)
+        header.pack(fill="x", padx=20, pady=(12, 4))
+        tk.Label(header, text=heading, fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 20, "bold")).pack()
+        tk.Label(header, text=subtitle or f"Detected: {parsed['Rank']} {parsed['Full_Name']}",
+                 fg="white", bg=BG_COLOR, font=("Helvetica", 14), wraplength=820).pack(pady=(6, 0))
+
+        scroll_container = tk.Frame(reg_win, bg=BG_COLOR)
+        scroll_container.pack(fill="both", expand=True, padx=10, pady=(4, 0))
+
+        canvas = tk.Canvas(scroll_container, bg=BG_COLOR, highlightthickness=0)
+        scrollbar = tk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        form_frame = tk.Frame(canvas, bg=BG_COLOR)
+
+        form_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=form_frame, anchor="nw", width=860)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def on_linux_scroll(event):
+            if event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
+        canvas.bind_all("<Button-4>", on_linux_scroll)
+        canvas.bind_all("<Button-5>", on_linux_scroll)
+
+        def on_close():
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+            reg_win.destroy()
+
+        reg_win.protocol("WM_DELETE_WINDOW", on_close)
 
         rank_var = tk.StringVar(value=parsed["Rank"])
         last_var = tk.StringVar(value=parsed["Last_Name"])
         first_var = tk.StringVar(value=parsed["First_Name"])
         mi_var = tk.StringVar(value=parsed["Middle_Initial"])
 
-        tk.Label(reg_win, text="Rank:", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 14)).pack(anchor="w", padx=50)
-        tk.Entry(reg_win, textvariable=rank_var, font=("Helvetica", 16), width=40).pack(pady=5)
-        tk.Label(reg_win, text="Last Name:", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 14)).pack(anchor="w", padx=50)
-        tk.Entry(reg_win, textvariable=last_var, font=("Helvetica", 16), width=40).pack(pady=5)
-        tk.Label(reg_win, text="First Name:", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 14)).pack(anchor="w", padx=50)
-        tk.Entry(reg_win, textvariable=first_var, font=("Helvetica", 16), width=40).pack(pady=5)
-        tk.Label(reg_win, text="Middle Initial:", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 14)).pack(anchor="w", padx=50)
-        tk.Entry(reg_win, textvariable=mi_var, font=("Helvetica", 16), width=40).pack(pady=5)
+        def add_field(label, var):
+            tk.Label(form_frame, text=label + ":", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 13)).pack(anchor="w", padx=40, pady=(10, 0))
+            tk.Entry(form_frame, textvariable=var, font=("Helvetica", 15), width=42).pack(padx=40, pady=4)
 
-        tk.Label(reg_win, text="10-digit EDIPI (from your CAC):", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 14)).pack(anchor="w", padx=50, pady=(20,5))
+        add_field("Rank", rank_var)
+        add_field("Last Name", last_var)
+        add_field("First Name", first_var)
+        add_field("Middle Initial", mi_var)
+
+        tk.Label(form_frame, text="10-digit EDIPI (from your CAC):", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 13)).pack(anchor="w", padx=40, pady=(14, 0))
         edipi_var = tk.StringVar()
-        tk.Entry(reg_win, textvariable=edipi_var, font=("Helvetica", 16), width=40).pack(pady=5)
+        tk.Entry(form_frame, textvariable=edipi_var, font=("Helvetica", 15), width=42).pack(padx=40, pady=4)
 
-        tk.Label(reg_win, text="Phone Number:", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 14)).pack(anchor="w", padx=50, pady=(20,5))
+        tk.Label(form_frame, text="Phone Number:", fg=USMC_GOLD, bg=BG_COLOR, font=("Helvetica", 13)).pack(anchor="w", padx=40, pady=(14, 0))
         phone_var = tk.StringVar()
-        tk.Entry(reg_win, textvariable=phone_var, font=("Helvetica", 16), width=40).pack(pady=5)
+        tk.Entry(form_frame, textvariable=phone_var, font=("Helvetica", 15), width=42).pack(padx=40, pady=4)
 
         def finish_registration():
             try:
@@ -518,23 +575,27 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
                                   formatted_phone, pin_hash)
 
                 self.profiles = load_profiles()
-                # Refresh current_user *from the saved profile* (which now has the user-corrected
-                # Last/First/Middle names instead of the original parsed UNKNOWNs). This ensures
-                # that handle_check_in_out -> group = [self.current_user.copy()] -> log_check_out
-                # writes the proper name into the daily log CSV (so "View Marines Out" shows it).
-                if parsed["Raw_ID"] in self.profiles:
-                    self.current_user = self.profiles[parsed["Raw_ID"]].copy()
-                else:
-                    self.current_user["EDIPI"] = edipi
-                    self.current_user["Raw_ID"] = parsed["Raw_ID"]
+                saved_profile = self.profiles.get(parsed["Raw_ID"])
+                if not saved_profile:
+                    self.themed_showerror("Error", "Profile saved but could not be reloaded.")
+                    return
 
-                reg_win.destroy()
+                on_close()
                 self.show_message(f"✅ {first_var.get()} {last_var.get()} registered! Oorah!", USMC_GOLD, 6)
-                self.after(1500, self.handle_check_in_out)
+
+                if on_complete:
+                    self.after(500, lambda p=saved_profile.copy(): on_complete(p))
+                else:
+                    # Refresh current_user from the saved profile so checkout logs use corrected names.
+                    self.current_user = saved_profile.copy()
+                    self.after(1500, self.handle_check_in_out)
             except Exception as e:
                 self.themed_showerror("Error", f"Failed to save profile:\n{e}")
 
-        tk.Button(reg_win, text="REGISTER MARINE", bg=USMC_GOLD, fg=USMC_DARK, font=("Helvetica", 18, "bold"), command=finish_registration).pack(pady=40)
+        footer = tk.Frame(reg_win, bg=BG_COLOR)
+        footer.pack(fill="x", side="bottom", padx=20, pady=12)
+        tk.Button(footer, text="REGISTER MARINE", bg=USMC_GOLD, fg=USMC_DARK,
+                  font=("Helvetica", 16, "bold"), height=2, command=finish_registration).pack(fill="x")
 
     def handle_check_in_out(self):
         raw_id = self.current_user.get("Raw_ID")
@@ -550,62 +611,123 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
         full_name = profile.get("Full_Name") or f"{profile.get('Last_Name', '')}, {profile.get('First_Name', '')}"
 
         if open_entry:
-            pin = self.themed_askstring("CHECK IN", f"Enter PIN to CHECK IN\n{full_name}", show='*')
-            if pin and self.verify_pin(profile, pin):
-                self.update_check_in(edipi, log_file)
-                self.show_message(f"✅ {full_name} CHECKED IN", USMC_GOLD, 6)
+            _, log_file, group_rows = self.find_open_group(edipi)
+            if len(group_rows) > 1:
+                if self.handle_group_check_in(profile, group_rows, log_file):
+                    self.show_message(f"✅ Group of {len(group_rows)} CHECKED IN", USMC_GOLD, 6)
             else:
-                self.themed_showerror("Invalid PIN", "❌ Invalid PIN")
+                pin = self.themed_askstring("CHECK IN", f"Enter PIN to CHECK IN\n{full_name}", show='*')
+                if pin and self.verify_pin(profile, pin):
+                    self.update_check_in(edipi, log_file)
+                    self.show_message(f"✅ {full_name} CHECKED IN", USMC_GOLD, 6)
+                else:
+                    self.themed_showerror("Invalid PIN", "❌ Invalid PIN")
         else:
             pin = self.themed_askstring("CHECK OUT", f"Enter PIN to CHECK OUT\n{full_name}", show='*')
             if not pin or not self.verify_pin(profile, pin):
                 self.themed_showerror("Invalid PIN", "❌ Invalid PIN")
                 return
 
-            group = [self.current_user.copy()]
-            while True:
-                buddy_input = self.themed_askstring("BUDDY SCAN", "Scan next buddy's CAC\n(or leave blank to finish)")
-                if not buddy_input or buddy_input.strip() == "":
-                    break
-                buddy = buddy_input.strip()
-                if self.is_zyn_code(buddy):
-                    self.show_zyn_easter_egg(buddy)
-                    continue
-                if len(buddy) != 99:
-                    self.themed_showerror("Invalid Scan", "❌ Please scan the FRONT of a valid CAC only.")
-                    continue
-                try:
-                    b_parsed = parse_cac_barcode(buddy)
-                    b_raw_id = b_parsed["Raw_ID"]
-                    if b_raw_id == raw_id:
-                        self.themed_showerror("Duplicate", "You cannot add yourself as a buddy.")
-                        continue
-                    if b_raw_id in self.profiles:
-                        # Pull FULL buddy data from profile (correct EDIPI, names, etc.)
-                        buddy_data = self.profiles[b_raw_id].copy()
-                    else:
-                        # New buddy not yet registered. Do NOT create a profile with a
-                        # guessable default PIN (the old code seeded "00000", which would
-                        # let anyone check that Marine in/out). Log them from the parsed
-                        # CAC data only; they register and pick their own PIN the first
-                        # time they use the kiosk themselves.
-                        buddy_data = dict(b_parsed)
-                        buddy_data["EDIPI"] = ""  # unknown until they register in person
-                    group.append(buddy_data)
-                    self.show_message(f"✅ {buddy_data['Full_Name']} added to group", USMC_GOLD, 2)
-                except Exception:
-                    self.themed_showerror("Parse Error", "❌ Could not read CAC barcode.")
-                    continue
+            self._begin_buddy_checkout(profile)
+            return
 
-            while True:
-                destination = self.themed_askstring("DESTINATION", "Where are you going?")
-                if destination and destination.strip():
-                    break
-                self.themed_showerror("Required Field", "Destination cannot be blank.")
+        self._finish_checkout_session()
 
-            self.log_check_out(group, profile, destination)
-            self.show_message(f"✅ Group of {len(group)} checked OUT", USMC_GOLD, 6)
+    def _begin_buddy_checkout(self, sponsor_profile):
+        self._checkout_group = [self.current_user.copy()]
+        self._checkout_sponsor_profile = sponsor_profile
+        self._prompt_buddy_scan()
 
+    def _prompt_buddy_scan(self):
+        buddy_input = self.themed_askstring("BUDDY SCAN", "Scan next buddy's CAC\n(or leave blank to finish)")
+        if not buddy_input or buddy_input.strip() == "":
+            self._prompt_checkout_destination()
+            return
+
+        buddy = buddy_input.strip()
+        if self.is_zyn_code(buddy):
+            self.show_zyn_easter_egg(buddy)
+            self.after(100, self._prompt_buddy_scan)
+            return
+        if len(buddy) != 99:
+            self.themed_showerror("Invalid Scan", "❌ Please scan the FRONT of a valid CAC only.")
+            self.after(100, self._prompt_buddy_scan)
+            return
+
+        try:
+            b_parsed = parse_cac_barcode(buddy)
+        except Exception:
+            self.themed_showerror("Parse Error", "❌ Could not read CAC barcode.")
+            self.after(100, self._prompt_buddy_scan)
+            return
+
+        b_raw_id = b_parsed["Raw_ID"]
+        sponsor_raw_id = self._checkout_sponsor_profile.get("Raw_ID", "")
+        if b_raw_id == sponsor_raw_id:
+            self.themed_showerror("Duplicate", "You cannot add yourself as a buddy.")
+            self.after(100, self._prompt_buddy_scan)
+            return
+
+        if any(m.get("Raw_ID") == b_raw_id for m in self._checkout_group):
+            self.themed_showerror("Duplicate", "That Marine is already in this group.")
+            self.after(100, self._prompt_buddy_scan)
+            return
+
+        if b_raw_id in self.profiles:
+            self._verify_buddy_pin_and_add(self.profiles[b_raw_id].copy())
+            return
+
+        self.show_registration_screen(
+            b_parsed,
+            on_complete=self._on_buddy_registered,
+            heading="🆕 BUDDY REGISTRATION",
+            subtitle=(
+                f"Detected: {b_parsed['Rank']} {b_parsed['Full_Name']}\n\n"
+                "This Marine must register before joining your liberty group."
+            ),
+        )
+
+    def _verify_buddy_pin_and_add(self, buddy_profile):
+        buddy_name = buddy_profile.get("Full_Name") or f"{buddy_profile.get('Last_Name', '')}, {buddy_profile.get('First_Name', '')}"
+        pin = self.themed_askstring(
+            "GROUP CHECK OUT",
+            f"Enter PIN to CHECK OUT\n{buddy_name}\n\n"
+            f"All Marines in the group must enter their PIN.",
+            show='*'
+        )
+        if not pin or not self.verify_pin(buddy_profile, pin):
+            self.themed_showerror("Invalid PIN", f"❌ Invalid PIN for {buddy_name}")
+            self.after(100, self._prompt_buddy_scan)
+            return
+
+        if any(m.get("Raw_ID") == buddy_profile.get("Raw_ID") for m in self._checkout_group):
+            self.after(100, self._prompt_buddy_scan)
+            return
+
+        self._checkout_group.append(buddy_profile)
+        self.show_message(f"✅ {buddy_name} added to group", USMC_GOLD, 2)
+        self.after(500, self._prompt_buddy_scan)
+
+    def _on_buddy_registered(self, profile):
+        if any(m.get("Raw_ID") == profile.get("Raw_ID") for m in self._checkout_group):
+            self.after(100, self._prompt_buddy_scan)
+            return
+        self._verify_buddy_pin_and_add(profile)
+
+    def _prompt_checkout_destination(self):
+        destination = self.themed_askstring("DESTINATION", "Where are you going?")
+        if not destination or not destination.strip():
+            self.themed_showerror("Required Field", "Destination cannot be blank.")
+            self.after(100, self._prompt_checkout_destination)
+            return
+
+        self.log_check_out(self._checkout_group, self._checkout_sponsor_profile, destination.strip())
+        self.show_message(f"✅ Group of {len(self._checkout_group)} checked OUT", USMC_GOLD, 6)
+        self._checkout_group = None
+        self._checkout_sponsor_profile = None
+        self._finish_checkout_session()
+
+    def _finish_checkout_session(self):
         self.current_user = None
         self.after(3000, self.build_main_screen)
 
@@ -632,9 +754,172 @@ class LibertyKiosk(tk.Tk, ThemedDialogs):
                 reader = csv.DictReader(f)
                 rows = list(reader)
                 for row in reversed(rows):
-                    if row.get("EDIPI") == edipi and (row.get("Time_in") == "" or row.get("Time_in") is None or str(row.get("Time_in")).strip() == ""):
+                    if row.get("EDIPI") == edipi and self._is_open_liberty_row(row):
                         return row, log_file
         return None, None
+
+    def _is_open_liberty_row(self, row):
+        return not row.get("Time_in") or str(row.get("Time_in")).strip() == ""
+
+    def _liberty_group_sponsor_edipi(self, row):
+        buddy_name = row.get("Buddy_Name", "")
+        if buddy_name and buddy_name != "Self":
+            return str(row.get("Buddy_EDIPI", "")).strip()
+        return str(row.get("EDIPI", "")).strip()
+
+    def _liberty_group_key(self, row):
+        return (
+            str(row.get("Time_out", "")).strip(),
+            str(row.get("Destination", "")).strip(),
+            self._liberty_group_sponsor_edipi(row),
+        )
+
+    def _row_member_id(self, row):
+        edipi = str(row.get("EDIPI", "")).strip()
+        return edipi if edipi else str(row.get("Name", "")).strip()
+
+    def _collect_open_liberty_groups(self):
+        """Return OrderedDict of group_key -> list of open rows (preserving first-seen order)."""
+        from collections import OrderedDict
+        grouped = OrderedDict()
+        for i in range(7):
+            d = datetime.date.today() - datetime.timedelta(days=i)
+            log_file = DATA_DIR / "daily_logs" / f"liberty_log_{d.isoformat()}.csv"
+            if not log_file.exists():
+                continue
+            with open(log_file, "r", newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if not self._is_open_liberty_row(row):
+                        continue
+                    key = self._liberty_group_key(row)
+                    grouped.setdefault(key, []).append(row)
+        return grouped
+
+    def find_open_group(self, edipi):
+        open_entry, log_file = self.find_open_entry(edipi)
+        if not open_entry:
+            return None, None, []
+        key = self._liberty_group_key(open_entry)
+        group_rows = []
+        with open(log_file, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if self._is_open_liberty_row(row) and self._liberty_group_key(row) == key:
+                    group_rows.append(row)
+        return open_entry, log_file, group_rows
+
+    def _match_group_member_from_scan(self, barcode, group_rows, verified_ids):
+        if barcode in self.profiles:
+            profile = self.profiles[barcode]
+            member_edipi = str(profile.get("EDIPI", "")).strip()
+            for row in group_rows:
+                if self._row_member_id(row) in verified_ids:
+                    continue
+                if str(row.get("EDIPI", "")).strip() == member_edipi:
+                    return row, profile
+
+        try:
+            parsed = parse_cac_barcode(barcode)
+        except Exception:
+            return None, None
+
+        raw_id = parsed.get("Raw_ID", barcode)
+        profile = self.profiles.get(raw_id)
+        full_name = parsed.get("Full_Name", "")
+        for row in group_rows:
+            if self._row_member_id(row) in verified_ids:
+                continue
+            if row.get("Name") == full_name:
+                return row, profile
+        return None, None
+
+    def handle_group_check_in(self, initiating_profile, group_rows, log_file):
+        """Require every group member to scan CAC and enter PIN before checking in."""
+        member_ids = {self._row_member_id(r) for r in group_rows}
+        verified_ids = set()
+
+        init_edipi = str(initiating_profile.get("EDIPI", "")).strip()
+        init_row = next((r for r in group_rows if str(r.get("EDIPI", "")).strip() == init_edipi), None)
+        if not init_row:
+            self.themed_showerror("Error", "Could not match your liberty record in this group.")
+            return False
+
+        init_name = initiating_profile.get("Full_Name") or init_row.get("Name", "")
+        pin = self.themed_askstring(
+            "GROUP CHECK IN",
+            f"Enter PIN to CHECK IN\n{init_name}\n\n"
+            f"All {len(group_rows)} Marines in this buddy group must scan CAC and enter PIN.",
+            show='*'
+        )
+        if not pin or not self.verify_pin(initiating_profile, pin):
+            self.themed_showerror("Invalid PIN", "❌ Invalid PIN")
+            return False
+        verified_ids.add(self._row_member_id(init_row))
+
+        while len(verified_ids) < len(member_ids):
+            remaining = len(member_ids) - len(verified_ids)
+            buddy_input = self.themed_askstring(
+                "GROUP CHECK IN",
+                f"Scan next group member's CAC\n({remaining} remaining — {len(verified_ids)}/{len(group_rows)} verified)\n\n"
+                f"Leave blank to cancel."
+            )
+            if not buddy_input or buddy_input.strip() == "":
+                self.themed_showerror("Incomplete", "All group members must scan CAC and enter PIN to check in.")
+                return False
+
+            buddy = buddy_input.strip()
+            if self.is_zyn_code(buddy):
+                self.show_zyn_easter_egg(buddy)
+                continue
+            if len(buddy) != 99:
+                self.themed_showerror("Invalid Scan", "❌ Please scan the FRONT of a valid CAC only.")
+                continue
+
+            row, profile = self._match_group_member_from_scan(buddy, group_rows, verified_ids)
+            if not row:
+                self.themed_showerror("Not In Group", "❌ That Marine is not part of this buddy group.")
+                continue
+            if not profile:
+                self.themed_showerror(
+                    "Registration Required",
+                    f"❌ {row.get('Name', 'This Marine')} must register at the kiosk before checking in."
+                )
+                continue
+
+            member_name = profile.get("Full_Name") or row.get("Name", "")
+            pin = self.themed_askstring("GROUP CHECK IN", f"Enter PIN to CHECK IN\n{member_name}", show='*')
+            if not pin or not self.verify_pin(profile, pin):
+                self.themed_showerror("Invalid PIN", f"❌ Invalid PIN for {member_name}")
+                continue
+
+            verified_ids.add(self._row_member_id(row))
+
+        self.update_group_check_in(group_rows, log_file)
+        return True
+
+    def update_group_check_in(self, group_rows, log_file):
+        rows = []
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        group_key = self._liberty_group_key(group_rows[0])
+        member_ids = {self._row_member_id(r) for r in group_rows}
+        with open(log_file, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+            rows = list(reader)
+        updated = False
+        for row in rows:
+            if (self._is_open_liberty_row(row)
+                    and self._liberty_group_key(row) == group_key
+                    and self._row_member_id(row) in member_ids):
+                row["Time_in"] = now_str
+                updated = True
+        if updated:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_file, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
 
     def update_check_in(self, edipi, log_file):
         rows = []
